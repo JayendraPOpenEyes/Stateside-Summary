@@ -34,28 +34,21 @@ class TextProcessor:
         # Hardcode the model names for consistency on the backend
         if model.lower() == "openai":
             self.model = "gpt-4o-mini"  # Use gpt-4o-mini as the OpenAI model
-        elif model.lower() == "togetherai":
-            self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"  # Use a specific LLaMA model for TogetherAI
-        else:
-            raise ValueError(f"Unsupported model selection: {model}. Use 'openai' or 'togetherai'.")
-
-        # Fetch API keys from environment
-        self.together_api_key = os.getenv('TOGETHERAI_API_KEY')
-        self.openai_api_key = os.getenv('OPENAI_API_KEY')
-
-        # Log the API keys (masked for security) to debug
-        logging.info(f"OpenAI API Key: {'Set' if self.openai_api_key else 'Not Set'}")
-        logging.info(f"TogetherAI API Key: {'Set' if self.together_api_key else 'Not Set'}")
-
-        # Strict validation: fail if key is missing or empty for the selected model
-        if "gpt" in self.model.lower():
+            self.openai_api_key = os.getenv('OPENAI_API_KEY')
             if not self.openai_api_key or self.openai_api_key.strip() == "":
                 raise ValueError("OpenAI API key is missing or empty. Set OPENAI_API_KEY in the .env file.")
-        elif "llama" in self.model.lower():
+            self.openai_client = openai.OpenAI(api_key=self.openai_api_key)  # Initialize OpenAI client
+        elif model.lower() == "togetherai":
+            self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"  # Use a specific LLaMA model for TogetherAI
+            self.together_api_key = os.getenv('TOGETHERAI_API_KEY')
             if not self.together_api_key or self.together_api_key.strip() == "":
                 raise ValueError("TogetherAI API key is missing or empty. Set TOGETHERAI_API_KEY in the .env file.")
         else:
-            raise ValueError(f"Unsupported model: {self.model}. This should not happen with current configuration.")
+            raise ValueError(f"Unsupported model selection: {model}. Use 'openai' or 'togetherai'.")
+
+        # Log the API keys (masked for security) to debug
+        logging.info(f"OpenAI API Key: {'Set' if hasattr(self, 'openai_api_key') and self.openai_api_key else 'Not Set'}")
+        logging.info(f"TogetherAI API Key: {'Set' if hasattr(self, 'together_api_key') and self.together_api_key else 'Not Set'}")
 
     def get_save_directory(self, base_name):
         if not base_name or not base_name.strip():
@@ -92,11 +85,12 @@ class TextProcessor:
             return ""
 
     def extract_text_from_pdf_native(self, pdf_bytes):
+        """Try to extract text natively using PyMuPDF, matching the old behavior."""
         try:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             text = ""
             for page in doc:
-                text += page.get_text() + "\n"
+                text += page.get_text() + "\n"  # Use simple get_text() as in the old code
             return text.strip()
         except Exception as e:
             logging.error(f"Error in native PDF extraction: {str(e)}")
@@ -129,38 +123,72 @@ class TextProcessor:
             results = executor.map(lambda x: process_page(x[0], x[1]), enumerate(images))
             for text in results:
                 combined_text += text + "\n"
+        if self.is_blank_text(combined_text):
+            return ""
         return combined_text
 
-    async def async_extract_text_from_url(self, url):
-        if self.is_google_cache_link(url):
-            return {"text": "", "content_type": None, "error": "google_cache"}
+    def extract_text_from_html(self, html_content):
+        """Extract text from HTML content using BeautifulSoup, matching the old behavior."""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for tag in soup(['script', 'style']):
+            tag.decompose()
+        return soup.get_text(separator=' ').strip()
+
+    async def async_extract_text_from_url(self, url: str) -> dict:
         try:
+            if self.is_google_cache_link(url):
+                return {"text": "", "content_type": None, "error": "google_cache"}
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        return {"text": "", "content_type": None, "error": f"HTTP error {response.status}"}
-                    content_type = response.headers.get('Content-Type', '').lower()
-                    content = await response.read()
-                    base_name = self.get_base_name_from_link(url)
-                    folder = self.get_save_directory(base_name)
-                    if url.lower().endswith('.pdf') or 'application/pdf' in content_type:
-                        pdf_path = os.path.join(folder, f"{base_name}.pdf")
-                        try:
-                            with open(pdf_path, 'wb') as f:
-                                f.write(content)
-                            logging.info(f"Saved PDF: {pdf_path}")
-                        except Exception as e:
-                            logging.error(f"Failed to save PDF {pdf_path}: {str(e)}")
-                            raise
-                        text = self.extract_text_from_pdf(io.BytesIO(content), url)
-                        if self.is_blank_text(text):
-                            return {"text": "", "content_type": "pdf", "error": "blank_pdf"}
-                        return {"text": text, "content_type": "pdf", "error": None}
-                    else:
-                        return {"text": "", "content_type": None, "error": "unsupported_type"}
+                try:
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            return {"text": "", "content_type": None, "error": f"HTTP error {response.status}"}
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        content = await response.read()
+                        base_name = self.get_base_name_from_link(url)
+                        folder = self.get_save_directory(base_name)
+                        if url.lower().endswith('.pdf') or 'application/pdf' in content_type:
+                            pdf_path = os.path.join(folder, f"{base_name}.pdf")
+                            try:
+                                with open(pdf_path, 'wb') as f:
+                                    f.write(content)
+                                logging.info(f"Saved PDF: {pdf_path}")
+                            except Exception as e:
+                                logging.error(f"Failed to save PDF {pdf_path}: {str(e)}")
+                                raise
+                            text = self.extract_text_from_pdf(io.BytesIO(content), url)
+                            if self.is_blank_text(text):
+                                return {"text": "", "content_type": "pdf", "error": "blank_pdf"}
+                            return {"text": text, "content_type": "pdf", "error": None}
+                        elif url.lower().endswith(('.htm', '.html')) or 'text/html' in content_type:
+                            html_path = os.path.join(folder, f"{base_name}.html")
+                            try:
+                                with open(html_path, 'wb') as f:
+                                    f.write(content)
+                                logging.info(f"Saved HTML: {html_path}")
+                            except Exception as e:
+                                logging.error(f"Failed to save HTML {html_path}: {str(e)}")
+                                raise
+                            text = self.extract_text_from_html(content)
+                            if self.is_blank_text(text):
+                                return {"text": "", "content_type": "html", "error": "blank_html"}
+                            return {"text": text, "content_type": "html", "error": None}
+                        elif 'text/plain' in content_type:
+                            text = content.decode('utf-8', errors='ignore').strip()
+                            if self.is_blank_text(text):
+                                return {"text": "", "content_type": "text", "error": "blank_text"}
+                            return {"text": text, "content_type": "text", "error": None}
+                        else:
+                            return {"text": "", "content_type": None, "error": "unsupported_type"}
+                except aiohttp.ClientError as ce:
+                    logging.error(f"Network error fetching URL {url}: {str(ce)}")
+                    return {"text": "", "content_type": None, "error": f"Network error: {str(ce)}"}
+                except Exception as e:
+                    logging.error(f"Unexpected error fetching URL {url}: {str(e)}")
+                    return {"text": "", "content_type": None, "error": f"Unexpected error: {str(e)}"}
         except Exception as e:
-            logging.error(f"Error fetching URL {url}: {str(e)}")
-            return {"text": "", "content_type": None, "error": str(e)}
+            logging.error(f"Error in async operation for URL {url}: {str(e)}")
+            return {"text": "", "content_type": None, "error": f"Async operation error: {str(e)}"}
 
     def process_uploaded_pdf(self, pdf_file, base_name="uploaded_pdf"):
         try:
@@ -176,9 +204,15 @@ class TextProcessor:
             except Exception as e:
                 logging.error(f"Failed to save PDF {pdf_path}: {str(e)}")
                 raise
+            
+            # Step 1: Try native PDF text extraction first for speed
             native_text = self.extract_text_from_pdf_native(pdf_bytes)
             if native_text and not self.is_blank_text(native_text):
+                logging.info("Native PDF text extraction succeeded.")
                 return {"text": native_text, "content_type": "pdf", "error": None}
+            
+            # Step 2: If native extraction fails, use OCR as fallback
+            logging.info("Native PDF extraction failed. Falling back to OCR.")
             images = convert_from_bytes(pdf_bytes)
             logging.info(f"OCR fallback: converting {len(images)} page(s) to images.")
             combined_text = ""
@@ -205,11 +239,59 @@ class TextProcessor:
             logging.error(f"Error processing uploaded PDF: {str(e)}")
             return {"text": "", "content_type": None, "error": str(e)}
 
+    def process_uploaded_html(self, html_file, base_name="uploaded_html"):
+        try:
+            folder = self.get_save_directory(base_name)
+            html_path = os.path.join(folder, f"{base_name}.html")
+            html_bytes = html_file.read()
+            if not html_bytes:
+                return {"text": "", "content_type": "html", "error": "Empty HTML file"}
+            try:
+                with open(html_path, 'wb') as f:
+                    f.write(html_bytes)
+                logging.info(f"Saved uploaded HTML: {html_path}")
+            except Exception as e:
+                logging.error(f"Failed to save HTML {html_path}: {str(e)}")
+                raise
+            text = self.extract_text_from_html(html_bytes)
+            if self.is_blank_text(text):
+                return {"text": "", "content_type": "html", "error": "blank_html"}
+            return {"text": text, "content_type": "html", "error": None}
+        except Exception as e:
+            logging.error(f"Error processing uploaded HTML: {str(e)}")
+            return {"text": "", "content_type": None, "error": str(e)}
+
     def preprocess_text(self, text):
         text = re.sub(r"[\r\n]{2,}", "\n", text)
         text = re.sub(r"[^\x00-\x7F]+", " ", text)
         text = re.sub(r"\s{2,}", " ", text)
         return text.strip()
+
+    def generate_structured_json(self, text):
+        """Streamlined generation of JSON structure directly from text, matching old behavior."""
+        paragraphs = text.split('\n')
+        json_data = {"h1": [], "p": []}
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            if len(para.split()) > 10:
+                json_data["p"].append(para)
+            else:
+                json_data["h1"].append(para)
+        return json_data
+
+    def process_full_text_to_json(self, text, base_name):
+        json_data = self.generate_structured_json(text)
+        base_folder = self.get_save_directory(base_name)
+        json_path = os.path.join(base_folder, f"{base_name}.json")
+        try:
+            with open(json_path, 'w', encoding='utf-8') as json_file:
+                json.dump(json_data, json_file, indent=4)
+            logging.info(f"Saved JSON: {json_path}")
+        except Exception as e:
+            logging.error(f"Error saving JSON: {str(e)}")
+        return text  # Return text instead of JSON for consistency with summary generation
 
     def truncate_text(self, text, max_tokens=3000):
         encoding = tiktoken.get_encoding("gpt2")
@@ -222,27 +304,44 @@ class TextProcessor:
         if not self.openai_api_key:
             raise ValueError("OpenAI API key is not set.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else "Summarize the following text:\n" + text
+        prompt = (
+            custom_prompt + "\n\nText to summarize:\n" + text
+            if custom_prompt
+            else (
+                """Please create a summary of the attached Legislation Bill. Each summary should start 
+with the phrase 'This measure...'. The summary should be at least a paragraph and not more than a full page in length. 
+The summary should only include what new is for the piece of legislation, it should not state any opinions or repeat any 
+messages that reflect current law prior to this bill's passage. Do not include a title section. Do not make the last paragraph 
+an 'in summary' or 'in conclusion' paragraph. The entire message is a summary; there is no need to summarize the summary. If an effective date is explicitly stated in the bill text, end the summary with 'This measure has an effective date of:' 
+followed by the specific date; if no effective date is present, do not include this statement.
+Text to summarize:
+""" + text
+            )
+        )
+        logging.info(f"Sending prompt to OpenAI: {prompt[:100]}...")
         try:
-            client = openai.OpenAI(api_key=self.openai_api_key)
-            response = client.chat.completions.create(
+            response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=1500
+                max_tokens=1500,
             )
             summary = response.choices[0].message.content.strip()
-            logging.info(f"Received OpenAI summary: {summary[:100]}...")
+            logging.info(f"Received summary: {summary[:100]}...")
             return {"summary": summary}
         except Exception as e:
-            logging.error(f"Error generating OpenAI summary: {str(e)}")
-            return {"summary": f"Error: {str(e)}"}
+            logging.error(f"Error generating summary: {str(e)}")
+            return {"summary": f"Error generating summary: {str(e)}"}
 
     def generate_summary_togetherai(self, text, custom_prompt=None):
         if not self.together_api_key:
             raise ValueError("TogetherAI API key is not set.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else "Summarize the following text:\n" + text
+        prompt = (
+            custom_prompt + "\n\nText to summarize:\n" + text
+            if custom_prompt
+            else "Summarize the following text:\n" + text
+        )
         try:
             headers = {
                 "Authorization": f"Bearer {self.together_api_key}",
@@ -293,7 +392,7 @@ class TextProcessor:
             "text_hash": text_hash,
             "summary": summary["summary"],
             "timestamp": time.time(),
-            "model": self.model  # Optional: store model for debugging
+            "model": self.model
         }
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
@@ -320,11 +419,18 @@ class TextProcessor:
             effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
             match = re.search(effective_date_pattern, text, re.IGNORECASE)
             if match:
-                date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
+                date_str = (
+                    match.group(0).split(":", 1)[-1].strip()
+                    if ":" in match.group(0)
+                    else match.group(0).split("on", 1)[-1].strip()
+                    if "on" in match.group(0)
+                    else match.group(0).split("effect", 1)[-1].strip()
+                )
                 summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        # Update cache
+        # Update cache and process text to JSON
         self.update_cached_summary(text, summary, base_name, custom_prompt)
+        self.process_full_text_to_json(text, base_name)
         return summary
 
 def process_input(input_data, model, custom_prompt=None):
@@ -333,7 +439,14 @@ def process_input(input_data, model, custom_prompt=None):
         if hasattr(input_data, "read"):
             base_name = input_data.name if hasattr(input_data, "name") else "uploaded_file"
             logging.info(f"Processing uploaded file: {base_name}")
-            result = processor.process_uploaded_pdf(input_data, base_name=base_name)
+            _, ext = os.path.splitext(base_name)
+            ext = ext.lower()
+            if ext == ".pdf":
+                result = processor.process_uploaded_pdf(input_data, base_name=base_name)
+            elif ext in [".htm", ".html"]:
+                result = processor.process_uploaded_html(input_data, base_name=base_name)
+            else:
+                return {"error": "Unsupported file type. Please upload a PDF or HTML file.", "model": model}
             if result["error"]:
                 return {"error": result["error"], "model": model}
             clean_text = processor.preprocess_text(result["text"])
@@ -344,16 +457,17 @@ def process_input(input_data, model, custom_prompt=None):
             clean_text = processor.preprocess_text(result["text"])
             base_name = processor.get_base_name_from_link(input_data)
         else:
-            return {"error": "Invalid input type. Expected URL or uploaded PDF.", "model": model}
+            return {"error": "Invalid input type. Expected URL, PDF, or HTML file.", "model": model}
 
         # Check cache before generating summary
         cached_summary = processor.get_cached_summary(clean_text, base_name, custom_prompt)
         if cached_summary:
             return {"model": model, "summary": cached_summary["summary"]}
 
-        # Generate and cache summary
+        # Generate, cache, and process summary
         summary = processor.generate_summary(clean_text, custom_prompt)
         processor.update_cached_summary(clean_text, summary, base_name, custom_prompt)
+        processor.process_full_text_to_json(clean_text, base_name)
         return {"model": model, "summary": summary["summary"]}
     except Exception as e:
         logging.error(f"Error processing input: {str(e)}")
