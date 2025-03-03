@@ -304,20 +304,16 @@ class TextProcessor:
         if not self.openai_api_key:
             raise ValueError("OpenAI API key is not set.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = (
-            custom_prompt + "\n\nText to summarize:\n" + text
-            if custom_prompt
-            else (
-                """Please create a summary of the attached Legislation Bill. Each summary should start 
-with the phrase 'This measure...'. The summary should be at least a paragraph and not more than a full page in length. 
-The summary should only include what new is for the piece of legislation, it should not state any opinions or repeat any 
-messages that reflect current law prior to this bill's passage. Do not include a title section. Do not make the last paragraph 
-an 'in summary' or 'in conclusion' paragraph. The entire message is a summary; there is no need to summarize the summary. If an effective date is explicitly stated in the bill text, end the summary with 'This measure has an effective date of:' 
-followed by the specific date; if no effective date is present, do not include this statement.
-Text to summarize:
-""" + text
-            )
-        )
+        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else """
+        Please create a summary of the attached Legislation Bill. Each summary should start 
+        with the phrase 'This measure...'. The summary should be at least a paragraph and not more than a full page in length. 
+        The summary should only include what new is for the piece of legislation, it should not state any opinions or repeat any 
+        messages that reflect current law prior to this bill's passage. do not include a title section. do not make the last paragraph 
+        a 'in summary' or 'in conclusion' paragraph. the entire message is a summary there is no need to summarize the summary. If an effective date is explicitly stated in the bill text, end the summary with 'This measure has an effective date of:' 
+        followed by the specific date; if no effective date is present, do not include this statement.
+        Text to summarize:
+        """ + text
+        
         logging.info(f"Sending prompt to OpenAI: {prompt[:100]}...")
         try:
             response = self.openai_client.chat.completions.create(
@@ -337,11 +333,7 @@ Text to summarize:
         if not self.together_api_key:
             raise ValueError("TogetherAI API key is not set.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = (
-            custom_prompt + "\n\nText to summarize:\n" + text
-            if custom_prompt
-            else "Summarize the following text:\n" + text
-        )
+        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else "Summarize the following text:\n" + text
         try:
             headers = {
                 "Authorization": f"Bearer {self.together_api_key}",
@@ -401,9 +393,8 @@ Text to summarize:
         except Exception as e:
             logging.error(f"Error writing cache file {cache_file}: {str(e)}")
 
-    def generate_summary(self, text, custom_prompt=None):
-        # Check cache first
-        base_name = "generated_summary"  # Default base_name, will be overridden in process_input
+    def generate_summary(self, text, base_name, custom_prompt=None):
+        # Use the provided base_name instead of a hardcoded default
         cached_summary = self.get_cached_summary(text, base_name, custom_prompt)
         if cached_summary:
             return cached_summary
@@ -419,16 +410,10 @@ Text to summarize:
             effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
             match = re.search(effective_date_pattern, text, re.IGNORECASE)
             if match:
-                date_str = (
-                    match.group(0).split(":", 1)[-1].strip()
-                    if ":" in match.group(0)
-                    else match.group(0).split("on", 1)[-1].strip()
-                    if "on" in match.group(0)
-                    else match.group(0).split("effect", 1)[-1].strip()
-                )
+                date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
                 summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        # Update cache and process text to JSON
+        # Update cache and process text to JSON in the same base_name folder
         self.update_cached_summary(text, summary, base_name, custom_prompt)
         self.process_full_text_to_json(text, base_name)
         return summary
@@ -459,15 +444,13 @@ def process_input(input_data, model, custom_prompt=None):
         else:
             return {"error": "Invalid input type. Expected URL, PDF, or HTML file.", "model": model}
 
-        # Check cache before generating summary
+        # Check cache before generating summary, using the derived base_name
         cached_summary = processor.get_cached_summary(clean_text, base_name, custom_prompt)
         if cached_summary:
             return {"model": model, "summary": cached_summary["summary"]}
 
-        # Generate, cache, and process summary
-        summary = processor.generate_summary(clean_text, custom_prompt)
-        processor.update_cached_summary(clean_text, summary, base_name, custom_prompt)
-        processor.process_full_text_to_json(clean_text, base_name)
+        # Generate, cache, and process summary in the same base_name folder
+        summary = processor.generate_summary(clean_text, base_name, custom_prompt)
         return {"model": model, "summary": summary["summary"]}
     except Exception as e:
         logging.error(f"Error processing input: {str(e)}")
