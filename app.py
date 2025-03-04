@@ -47,8 +47,9 @@ def main():
                 margin-bottom: 0 !important;
             }
             .custom-prompt-box {
-                margin-top: 0 !important;
-                margin-bottom: 0 !important;
+                margin-top: 0 !important; /* Remove top margin */
+                margin-bottom: 0 !important; /* Remove bottom margin */
+                padding: 0 !important; /* Remove padding */
             }
             .title-container {
                 display: flex;
@@ -98,18 +99,19 @@ def main():
                 border: 1px solid #e0e0e0;
                 background-color: #f9f9f9;
                 border-radius: 8px;
-                padding: 10px;
+                padding: 5px; /* Reduced padding for tighter fit */
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
                 white-space: pre-wrap;
-                margin-top: 0;
+                margin-top: 0; /* Remove top margin */
+                margin-bottom: 0; /* Remove bottom margin */
             }
             .stTextArea::placeholder {
                 color: #666;
                 opacity: 0.8;
             }
             [data-testid="stMarkdownContainer"] {
-                margin: 0;
-                padding: 0;
+                margin: 0 !important;
+                padding: 0 !important;
             }
             .stMarkdown p {
                 font-size: 16px;
@@ -117,6 +119,25 @@ def main():
                 margin-top: 5px;
                 margin-bottom: 15px;
                 font-style: italic;
+            }
+            /* Remove or hide the label for the text area */
+            [data-testid="stWidgetLabel"] {
+                display: none !important; /* Hides the label entirely */
+            }
+            /* Ensure no extra space from the container or placeholder */
+            .custom-prompt-box .stTextArea {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Remove column gap in the custom prompt box */
+            .custom-prompt-box .stColumns > div {
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            /* Remove margin and padding for headings inside custom-prompt-box */
+            .custom-prompt-box .stMarkdown h4 {
+                margin: 0 !important;
+                padding: 0 !important;
             }
         </style>
         """,
@@ -151,8 +172,9 @@ def main():
     if "custom_prompt" not in st.session_state:
         st.session_state.custom_prompt = ""
 
+    # Remove extra spacing around the custom prompt section
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
-    label_col, button_col = st.columns([0.7, 0.3])
+    label_col, button_col = st.columns([0.7, 0.3])  # Adjusted column ratio for tighter fit
     with label_col:
         st.markdown("#### Enter your custom prompt:")
     with button_col:
@@ -172,11 +194,13 @@ def main():
         if st.button("Sample Prompt", key="sample_prompt", help="Click to insert a sample prompt"):
             st.session_state.custom_prompt = sample_prompt
 
+    # Remove the label and adjust the text area to remove extra space
     custom_prompt = st.text_area(
-        "",
+        "",  # Empty label to avoid generating a label
         height=150,
         placeholder="Please enter a prompt or click 'Sample Prompt' to use the default.",
         value=st.session_state.custom_prompt,
+        label_visibility="hidden",  # Hide the label if present
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
