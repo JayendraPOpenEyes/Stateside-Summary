@@ -98,8 +98,8 @@ def main():
             .stTextArea {
                 border: 1px solid #e0e0e0;
                 background-color: #f9f9f9;
-                border-radius: 8px;
-                padding: 5px; /* Reduced padding for tighter fit */
+                border-radius: 3px;
+                padding: 1px; /* Reduced padding for tighter fit */
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
                 white-space: pre-wrap;
                 margin-top: 0; /* Remove top margin */
@@ -174,7 +174,7 @@ def main():
 
     # Remove extra spacing around the custom prompt section
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
-    label_col, button_col = st.columns([0.7, 0.3])  # Adjusted column ratio for tighter fit
+    label_col, spacer_col, button_col = st.columns([6.5, 1, 2])  # Adjusted column ratio for tighter fit
     with label_col:
         st.markdown("#### Enter your custom prompt:")
     with button_col:
