@@ -28,28 +28,22 @@ def display_summary(summary, identifier, use_typewriter=False):
         st.write("---")
 
 def main():
-    # (Optional) Set the page layout; adjust to 'wide' or remove if you prefer
     st.set_page_config(layout="centered")
 
-    # Custom CSS to remove extra spacing and style components
     st.markdown("""
         <style>
-        /* Remove top/bottom margins on the file uploader */
         .stFileUploader {
             margin-top: 0 !important;
             margin-bottom: 0 !important;
         }
-        /* Remove top/bottom margins on alert messages (e.g., st.success, st.warning) */
         .stAlert {
             margin-top: 0 !important;
             margin-bottom: 0 !important;
         }
-        /* Remove extra spacing around the custom prompt box */
         .custom-prompt-box {
             margin-top: 0 !important;
             margin-bottom: 0 !important;
         }
-        /* Below are your existing style rules, with margin-top removed or set to 0 */
         .title-container {
             display: flex;
             align-items: center;
@@ -121,17 +115,14 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    # Title with image (improved styling)
     col1, col2 = st.columns([1, 5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
     with col2:
         st.title("Bill Summarization Tool")
 
-    # Instruction line below the title
     st.markdown("Select a Stateside bill type, enter a URL, or upload a PDF file to generate a summary.")
 
-    # Input type selection
     input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"])
     input_data = None
     identifier = ""
@@ -147,61 +138,58 @@ def main():
             input_data = url
             identifier = url
 
-    # Initialize session state for custom prompt
     if "custom_prompt" not in st.session_state:
         st.session_state.custom_prompt = ""
 
-    # Custom prompt box
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
     label_col, button_col = st.columns([0.7, 0.3])
     with label_col:
         st.markdown("#### Enter your custom prompt:")
     with button_col:
+        sample_prompt = """
+        Summarize the provided legislative document, focusing only on new provisions introduced by this bill.
+        Start each summary with 'This measure...'.
+        The summary must be at least one paragraph long (minimum 4-6 sentences) and no longer than a full page,
+        detailing key changes such as definitions, rules, or exemptions, without including opinions, current laws,
+        or repetitive statements.
+        Do not add a title, introduction, or conclusion (e.g., 'in summary'); the entire text should be the summary.
+        If the document specifies an effective date, end the summary with 'This measure has an effective date of: [date]',
+        using the exact date provided; otherwise, do not include any effective date statement.
+        """
+        sample_prompt = "\n".join(line.strip() for line in sample_prompt.splitlines() if line.strip())
         if st.button("Sample Prompt", key="sample_prompt", help="Click to insert a sample prompt"):
-            sample_prompt = """
-            Summarize the provided legislative document, focusing only on new provisions introduced by this bill.
-            Start each summary with 'This measure...'.
-            The summary must be at least one paragraph long (minimum 4-6 sentences) and no longer than a full page,
-            detailing key changes such as definitions, rules, or exemptions, without including opinions, current laws,
-            or repetitive statements.
-            Do not add a title, introduction, or conclusion (e.g., 'in summary'); the entire text should be the summary.
-            If the document specifies an effective date, end the summary with 'This measure has an effective date of: [date]',
-            using the exact date provided; otherwise, do not include any effective date statement.
-            """
-            # Clean up whitespace in the sample prompt
-            sample_prompt = "\n".join(line.strip() for line in sample_prompt.splitlines() if line.strip())
             st.session_state.custom_prompt = sample_prompt
 
     custom_prompt = st.text_area(
         "",
         height=150,
-        placeholder="e.g., 'Summarize this in 3 sentences'",
+        placeholder="Please enter a prompt or click 'Sample Prompt' to use the default.",
         value=st.session_state.custom_prompt
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Model selection
     model_options = ["OpenAI (GPT-4o-mini)", "TogetherAI (LLaMA)"]
     model = st.selectbox("Select model:", model_options)
     model_key = "openai" if "OpenAI" in model else "togetherai"
 
-    # Summarize button
     if st.button("Summarize"):
         if input_data:
-            with st.spinner('Processing...'):
-                result = process_input(input_data, model=model_key, custom_prompt=custom_prompt)
-                if "error" in result:
-                    st.warning(f"Failed to process: {result['error']}")
-                else:
-                    st.success("Summarization complete!")
-                    st.session_state.all_summaries = st.session_state.get("all_summaries", {})
-                    st.session_state.all_summaries[identifier] = result
-                    st.session_state.last_processed = identifier
-                    display_summary(result, identifier, use_typewriter=True)
+            if not custom_prompt or custom_prompt.strip() == "":
+                st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
+            else:
+                with st.spinner('Processing...'):
+                    result = process_input(input_data, model=model_key, custom_prompt=custom_prompt)
+                    if "error" in result:
+                        st.warning(f"Failed to process: {result['error']}")
+                    else:
+                        st.success("Summarization complete!")
+                        st.session_state.all_summaries = st.session_state.get("all_summaries", {})
+                        st.session_state.all_summaries[identifier] = result
+                        st.session_state.last_processed = identifier
+                        display_summary(result, identifier, use_typewriter=True)
         else:
             st.error("Please provide an input (PDF or URL).")
 
-    # Display previous summaries
     if "all_summaries" in st.session_state and st.session_state.all_summaries:
         st.subheader("Previous Summaries")
         for iden, summary in st.session_state.all_summaries.items():

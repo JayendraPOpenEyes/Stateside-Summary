@@ -300,19 +300,13 @@ class TextProcessor:
             tokens = tokens[:max_tokens]
         return encoding.decode(tokens)
 
-    def generate_summary_openai(self, text, custom_prompt=None):
+    def generate_summary_openai(self, text, custom_prompt):
         if not self.openai_api_key:
             raise ValueError("OpenAI API key is not set.")
+        if not custom_prompt or custom_prompt.strip() == "":
+            raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else """
-        Please create a summary of the attached Legislation Bill. Each summary should start 
-        with the phrase 'This measure...'. The summary should be at least a paragraph and not more than a full page in length. 
-        The summary should only include what new is for the piece of legislation, it should not state any opinions or repeat any 
-        messages that reflect current law prior to this bill's passage. do not include a title section. do not make the last paragraph 
-        a 'in summary' or 'in conclusion' paragraph. the entire message is a summary there is no need to summarize the summary. If an effective date is explicitly stated in the bill text, end the summary with 'This measure has an effective date of:' 
-        followed by the specific date; if no effective date is present, do not include this statement.
-        Text to summarize:
-        """ + text
+        prompt = custom_prompt + "\n\nText to summarize:\n" + text
         
         logging.info(f"Sending prompt to OpenAI: {prompt[:100]}...")
         try:
@@ -329,11 +323,13 @@ class TextProcessor:
             logging.error(f"Error generating summary: {str(e)}")
             return {"summary": f"Error generating summary: {str(e)}"}
 
-    def generate_summary_togetherai(self, text, custom_prompt=None):
+    def generate_summary_togetherai(self, text, custom_prompt):
         if not self.together_api_key:
             raise ValueError("TogetherAI API key is not set.")
+        if not custom_prompt or custom_prompt.strip() == "":
+            raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
         text = self.truncate_text(text, max_tokens=4000)
-        prompt = custom_prompt + "\n\nText to summarize:\n" + text if custom_prompt else "Summarize the following text:\n" + text
+        prompt = custom_prompt + "\n\nText to summarize:\n" + text
         try:
             headers = {
                 "Authorization": f"Bearer {self.together_api_key}",
@@ -354,16 +350,16 @@ class TextProcessor:
             logging.error(f"Error generating TogetherAI summary: {str(e)}")
             return {"summary": f"Error: {str(e)}"}
 
-    def get_hash(self, text, custom_prompt=None):
-        # Combine text, custom_prompt (if provided), and model for the hash
-        combined_input = f"{text}{custom_prompt or ''}{self.model}"
+    def get_hash(self, text, custom_prompt):
+        # Combine text, custom_prompt, and model for the hash
+        combined_input = f"{text}{custom_prompt}{self.model}"
         return hashlib.md5(combined_input.encode('utf-8')).hexdigest()
 
     def get_cache_file_path(self, base_name, text_hash):
         folder = self.get_save_directory(base_name)
         return os.path.join(folder, f"{base_name}_{text_hash}_cache.json")
 
-    def get_cached_summary(self, text, base_name, custom_prompt=None, cache_expiry=3600):
+    def get_cached_summary(self, text, base_name, custom_prompt, cache_expiry=3600):
         text_hash = self.get_hash(text, custom_prompt)
         cache_file = self.get_cache_file_path(base_name, text_hash)
         if os.path.exists(cache_file):
@@ -377,7 +373,7 @@ class TextProcessor:
                 logging.error(f"Error reading cache file {cache_file}: {str(e)}")
         return None
 
-    def update_cached_summary(self, text, summary, base_name, custom_prompt=None):
+    def update_cached_summary(self, text, summary, base_name, custom_prompt):
         text_hash = self.get_hash(text, custom_prompt)
         cache_file = self.get_cache_file_path(base_name, text_hash)
         cache = {
@@ -393,32 +389,31 @@ class TextProcessor:
         except Exception as e:
             logging.error(f"Error writing cache file {cache_file}: {str(e)}")
 
-    def generate_summary(self, text, base_name, custom_prompt=None):
-        # Use the provided base_name instead of a hardcoded default
+    def generate_summary(self, text, base_name, custom_prompt):
+        if not custom_prompt or custom_prompt.strip() == "":
+            raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
+        
         cached_summary = self.get_cached_summary(text, base_name, custom_prompt)
         if cached_summary:
             return cached_summary
 
-        # Generate summary if not cached
         if "gpt" in self.model.lower():
             summary = self.generate_summary_openai(text, custom_prompt)
         else:
             summary = self.generate_summary_togetherai(text, custom_prompt)
 
         if "Error" not in summary["summary"]:
-            # Check for effective date in the text
             effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
             match = re.search(effective_date_pattern, text, re.IGNORECASE)
             if match:
                 date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
                 summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        # Update cache and process text to JSON in the same base_name folder
         self.update_cached_summary(text, summary, base_name, custom_prompt)
         self.process_full_text_to_json(text, base_name)
         return summary
 
-def process_input(input_data, model, custom_prompt=None):
+def process_input(input_data, model, custom_prompt):
     try:
         processor = TextProcessor(model=model)
         if hasattr(input_data, "read"):
@@ -444,14 +439,11 @@ def process_input(input_data, model, custom_prompt=None):
         else:
             return {"error": "Invalid input type. Expected URL, PDF, or HTML file.", "model": model}
 
-        # Check cache before generating summary, using the derived base_name
-        cached_summary = processor.get_cached_summary(clean_text, base_name, custom_prompt)
-        if cached_summary:
-            return {"model": model, "summary": cached_summary["summary"]}
-
-        # Generate, cache, and process summary in the same base_name folder
         summary = processor.generate_summary(clean_text, base_name, custom_prompt)
         return {"model": model, "summary": summary["summary"]}
+    except ValueError as ve:
+        logging.error(f"ValueError processing input: {str(ve)}")
+        return {"error": str(ve), "model": model}
     except Exception as e:
         logging.error(f"Error processing input: {str(e)}")
         return {"error": f"An error occurred: {str(e)}", "model": model}
