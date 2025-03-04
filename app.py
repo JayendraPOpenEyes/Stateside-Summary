@@ -51,7 +51,7 @@ def main():
             margin-bottom: 10px;
         }
         .logo-img {
-            border-radius: 10px;
+            border-radius: 20px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
             max-width: 100%;
         }
@@ -115,11 +115,11 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns([1, 5])
+    col1, col2 = st.columns([1.5, 4.5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
     with col2:
-        st.title("Bill Summarization Tool")
+        st.title("Bill Summarization")
 
     st.markdown("Select a Stateside bill type, enter a URL, or upload a PDF file to generate a summary.")
 
