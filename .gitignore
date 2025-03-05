@@ -1,3 +1,4 @@
 \__pycache__
 .env
-Dockerfile
+\saved_data
+\summary_env
