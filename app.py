@@ -164,7 +164,7 @@ def main():
             identifier = uploaded_pdf.name
             st.success("PDF uploaded successfully!")
     else:
-        url = st.text_input("Enter the URL of a PDF:")
+        url = st.text_input("Enter the URL of a PDF:", placeholder="Enter bill URL")
         if url:
             input_data = url
             identifier = url
