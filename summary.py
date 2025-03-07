@@ -27,10 +27,19 @@ load_dotenv()
 # Configure logging with DEBUG level for more detail
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize Firebase
+# Initialize Firebase using Streamlit Secrets
 if not firebase_admin._apps:
-    cred = credentials.Certificate(json.loads(st.secrets["firebase"]))
-    firebase_admin.initialize_app(cred)
+    try:
+        firebase_secret = st.secrets["firebase"]
+        # Ensure it's a string before passing to json.loads
+        if isinstance(firebase_secret, str):
+            cred = credentials.Certificate(json.loads(firebase_secret))
+        else:
+            raise ValueError("Firebase secret must be a JSON string in Streamlit Secrets.")
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Failed to initialize Firebase: {str(e)}")
+        raise
 db = firestore.client(database_id="statside-summary")
 
 # Base directory to save processed data
