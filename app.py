@@ -5,7 +5,7 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from firebase_admin.auth import EmailAlreadyExistsError
-
+import json
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
