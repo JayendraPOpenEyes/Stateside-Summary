@@ -5,19 +5,19 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from firebase_admin.auth import EmailAlreadyExistsError
-import io
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Initialize Firebase using Streamlit Secrets
+# Initialize Firebase
 if not firebase_admin._apps:
-    service_account = st.secrets["firebase"]["service_account"]
-    cred = credentials.Certificate(io.StringIO(service_account))
-    firebase_admin.initialize_app(cred, {"databaseURL": "https://statside-summary.firebaseio.com"})
+    cred = credentials.Certificate(json.loads(st.secrets["firebase"]))
+    firebase_admin.initialize_app(cred)
+# Use 'database_id' to specify the stateside-summary database
 db = firestore.client(database_id="statside-summary")
+
 
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""

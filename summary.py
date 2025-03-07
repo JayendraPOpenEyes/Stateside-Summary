@@ -19,18 +19,17 @@ import fitz
 import openai
 import firebase_admin
 from firebase_admin import credentials, firestore
-from streamlit import secrets as st
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging with DEBUG level for more detail
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize Firebase using Streamlit Secrets
+# Initialize Firebase
 if not firebase_admin._apps:
-    service_account = st.secrets["firebase"]["service_account"]
-    cred = credentials.Certificate(io.StringIO(service_account))
-    firebase_admin.initialize_app(cred, {"databaseURL": "https://statside-summary.firebaseio.com"})
+    cred = credentials.Certificate(json.loads(st.secrets["firebase"]))
+    firebase_admin.initialize_app(cred)
 db = firestore.client(database_id="statside-summary")
 
 # Base directory to save processed data
