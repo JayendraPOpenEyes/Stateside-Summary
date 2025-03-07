@@ -5,6 +5,7 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from firebase_admin.auth import EmailAlreadyExistsError
+import io
 
 # Configure logging
 logging.basicConfig(

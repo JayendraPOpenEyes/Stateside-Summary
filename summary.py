@@ -19,7 +19,7 @@ import fitz
 import openai
 import firebase_admin
 from firebase_admin import credentials, firestore
-
+from streamlit import secrets as st
 # Load environment variables from .env file
 load_dotenv()
 
