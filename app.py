@@ -11,13 +11,12 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Initialize Firebase
+# Initialize Firebase using Streamlit Secrets
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)
-# Use 'database_id' to specify the stateside-summary database
+    service_account = st.secrets["firebase"]["service_account"]
+    cred = credentials.Certificate(io.StringIO(service_account))
+    firebase_admin.initialize_app(cred, {"databaseURL": "https://statside-summary.firebaseio.com"})
 db = firestore.client(database_id="statside-summary")
-
 
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""

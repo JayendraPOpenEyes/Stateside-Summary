@@ -26,10 +26,11 @@ load_dotenv()
 # Configure logging with DEBUG level for more detail
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize Firebase
+# Initialize Firebase using Streamlit Secrets
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)
+    service_account = st.secrets["firebase"]["service_account"]
+    cred = credentials.Certificate(io.StringIO(service_account))
+    firebase_admin.initialize_app(cred, {"databaseURL": "https://statside-summary.firebaseio.com"})
 db = firestore.client(database_id="statside-summary")
 
 # Base directory to save processed data
