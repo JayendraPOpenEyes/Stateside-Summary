@@ -19,7 +19,6 @@ import fitz
 import openai
 import firebase_admin
 from firebase_admin import credentials, firestore
-import streamlit as st
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,19 +26,10 @@ load_dotenv()
 # Configure logging with DEBUG level for more detail
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize Firebase using Streamlit Secrets
+# Initialize Firebase
 if not firebase_admin._apps:
-    try:
-        firebase_secret = st.secrets["firebase"]
-        # Ensure it's a string before passing to json.loads
-        if isinstance(firebase_secret, str):
-            cred = credentials.Certificate(json.loads(firebase_secret))
-        else:
-            raise ValueError("Firebase secret must be a JSON string in Streamlit Secrets.")
-        firebase_admin.initialize_app(cred)
-    except Exception as e:
-        st.error(f"Failed to initialize Firebase: {str(e)}")
-        raise
+    cred = credentials.Certificate("firebase-adminsdk.json")
+    firebase_admin.initialize_app(cred)
 db = firestore.client(database_id="statside-summary")
 
 # Base directory to save processed data
@@ -364,10 +354,19 @@ class TextProcessor:
                 date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
                 summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        # Save to Firestore with add() to create a new document
+        # Generate a unique summary ID based on the base_name (identifier)
+        summary_id = re.sub(r"[^\w\-_\.]", "_", base_name)  # Clean the identifier for Firestore
+        summary_ref = db.collection("users").document(user_id).collection("summaries")
+        # Check for uniqueness and append a suffix if necessary
+        counter = 1
+        original_summary_id = summary_id
+        while summary_ref.document(summary_id).get().exists:
+            summary_id = f"{original_summary_id}_{counter}"
+            counter += 1
+
+        # Save to Firestore with the custom summary ID
         try:
-            summary_ref = db.collection("users").document(user_id).collection("summaries")
-            summary_ref.add({
+            summary_ref.document(summary_id).set({
                 "summary": summary["summary"],
                 "model": self.model,
                 "custom_prompt": custom_prompt,
@@ -375,7 +374,7 @@ class TextProcessor:
                 "identifier": base_name,
                 "display_name": display_name
             })
-            logging.info(f"Saved new summary to Firestore for {base_name} with display_name: {display_name}")
+            logging.info(f"Saved new summary to Firestore for {base_name} with display_name: {display_name}, summary_id: {summary_id}")
         except Exception as e:
             logging.error(f"Failed to save summary to Firestore: {str(e)}")
             raise

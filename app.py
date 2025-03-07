@@ -5,7 +5,9 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from firebase_admin.auth import EmailAlreadyExistsError
-import json
+import random
+import string
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -13,11 +15,9 @@ logging.basicConfig(
 
 # Initialize Firebase
 if not firebase_admin._apps:
-    cred = credentials.Certificate(json.loads(st.secrets["firebase"]))
+    cred = credentials.Certificate("firebase-adminsdk.json")
     firebase_admin.initialize_app(cred)
-# Use 'database_id' to specify the stateside-summary database
 db = firestore.client(database_id="statside-summary")
-
 
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""
@@ -26,7 +26,6 @@ def typewriter_effect(text, placeholder, delay=0.005):
         display_text += char
         placeholder.markdown(display_text)
         time.sleep(delay)
-
 
 def display_summary(summary, identifier, use_typewriter=False):
     """Display the summary in a structured format."""
@@ -41,44 +40,70 @@ def display_summary(summary, identifier, use_typewriter=False):
             st.markdown(summary["summary"])
         st.write("---")
 
+def generate_custom_user_id(display_name, email):
+    """Generate a custom user ID based on display_name or email."""
+    base = display_name if display_name else email.split("@")[0]
+    # Take the first 7 characters, replace invalid characters
+    base = "".join(c for c in base.lower() if c.isalnum())[:7]
+    if not base:
+        base = "user"
+    # Check for uniqueness by appending a random 4-character string if needed
+    custom_id = base
+    while db.collection("users").document(custom_id).get().exists:
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        custom_id = f"{base}_{random_suffix}"
+    return custom_id
 
 def login():
     """Handle user login and registration."""
     st.sidebar.subheader("Login / Register")
     email = st.sidebar.text_input("Email", placeholder="Enter email")
     password = st.sidebar.text_input("Password", type="password", placeholder="Enter password")
-    display_name = st.sidebar.text_input("Display Name", placeholder="Enter your name")  # New field for registration
+    display_name = st.sidebar.text_input("Display Name", placeholder="Enter your name")
     col1, col2 = st.sidebar.columns(2)
     with col1:
         if st.button("Login"):
             try:
                 user = auth.get_user_by_email(email)
-                st.session_state["user"] = user.uid
-                st.session_state["display_name"] = db.collection("users").document(user.uid).get().to_dict().get("display_name", email.split("@")[0])
-                st.success("Logged in successfully!")
+                # Find the custom user ID by querying the users collection
+                users_ref = db.collection("users").where("email", "==", email).limit(1).stream()
+                user_doc = next(users_ref, None)
+                if user_doc:
+                    custom_user_id = user_doc.id
+                    st.session_state["custom_user_id"] = custom_user_id
+                    st.session_state["display_name"] = user_doc.to_dict().get("display_name", email.split("@")[0])
+                    st.success("Logged in successfully!")
+                else:
+                    st.error("User data not found in database.")
             except Exception as e:
                 st.error(f"Login failed: {str(e)}")
     with col2:
         if st.button("Register"):
             try:
                 user = auth.create_user(email=email, password=password)
-                db.collection("users").document(user.uid).set({"email": email, "display_name": display_name or email.split("@")[0]})
-                st.session_state["user"] = user.uid
-                st.session_state["display_name"] = display_name or email.split("@")[0]
+                display_name = display_name or email.split("@")[0]
+                # Generate a custom user ID
+                custom_user_id = generate_custom_user_id(display_name, email)
+                # Store user data with the custom ID
+                db.collection("users").document(custom_user_id).set({
+                    "email": email,
+                    "display_name": display_name,
+                    "auth_uid": user.uid  # Store the Firebase UID for reference
+                })
+                st.session_state["custom_user_id"] = custom_user_id
+                st.session_state["display_name"] = display_name
                 st.success("Registered and logged in successfully!")
             except EmailAlreadyExistsError:
                 st.error("Email already exists.")
             except Exception as e:
                 st.error(f"Registration failed: {str(e)}")
 
-
 def logout():
     """Handle user logout."""
     if st.sidebar.button("Logout"):
-        del st.session_state["user"]
+        del st.session_state["custom_user_id"]
         del st.session_state["display_name"]
         st.success("Logged out successfully!")
-
 
 def main():
     st.set_page_config(layout="centered")
@@ -190,12 +215,15 @@ def main():
     )
 
     # Authentication handling
-    if "user" not in st.session_state:
+    if "custom_user_id" not in st.session_state:
         login()
         return
     else:
-        display_name = st.session_state.get("display_name", auth.get_user(st.session_state["user"]).email.split("@")[0])
-        st.sidebar.write(f"Logged in as: {display_name} ({auth.get_user(st.session_state['user']).email})")
+        display_name = st.session_state.get("display_name", "Unknown")
+        # Retrieve email from Firestore
+        user_doc = db.collection("users").document(st.session_state["custom_user_id"]).get()
+        email = user_doc.to_dict().get("email", "Unknown")
+        st.sidebar.write(f"Logged in as: {display_name} ({email})")
         logout()
 
     # UI Layout
@@ -269,7 +297,13 @@ def main():
                 st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
             else:
                 with st.spinner("Processing..."):
-                    result = process_input(input_data, model=model_key, custom_prompt=custom_prompt, user_id=st.session_state["user"], display_name=st.session_state.get("display_name", "Unknown"))
+                    result = process_input(
+                        input_data,
+                        model=model_key,
+                        custom_prompt=custom_prompt,
+                        user_id=st.session_state["custom_user_id"],
+                        display_name=st.session_state.get("display_name", "Unknown")
+                    )
                     if "error" in result:
                         st.warning(f"Failed to process: {result['error']}")
                     else:
@@ -281,7 +315,7 @@ def main():
 
     # Display Previous Summaries from Firestore
     st.subheader("Previous Summaries")
-    user_id = st.session_state["user"]
+    user_id = st.session_state["custom_user_id"]
     summaries_ref = db.collection("users").document(user_id).collection("summaries")
     docs = summaries_ref.stream()
     for doc in docs:
@@ -289,11 +323,9 @@ def main():
         identifier = summary_data["identifier"]
         model_used = summary_data["model"]
         display_name = summary_data.get("display_name", "Unknown")
-        # Use display_name as the primary identifier in the UI
         unique_identifier = f"{display_name}'s summary for {identifier} ({model_used})"
         if identifier != st.session_state.get("last_processed", ""):
             display_summary({"summary": summary_data["summary"]}, unique_identifier)
-
 
 if __name__ == "__main__":
     main()
