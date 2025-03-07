@@ -2,11 +2,21 @@ import streamlit as st
 from summary import process_input
 import logging
 import time
+import firebase_admin
+from firebase_admin import credentials, firestore, auth
+from firebase_admin.auth import EmailAlreadyExistsError
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+# Initialize Firebase
+if not firebase_admin._apps:
+    cred = credentials.Certificate("firebase-adminsdk.json")
+    firebase_admin.initialize_app(cred)
+# Use 'database_id' to specify the stateside-summary database
+db = firestore.client(database_id="statside-summary")
 
 
 def typewriter_effect(text, placeholder, delay=0.005):
@@ -32,9 +42,48 @@ def display_summary(summary, identifier, use_typewriter=False):
         st.write("---")
 
 
+def login():
+    """Handle user login and registration."""
+    st.sidebar.subheader("Login / Register")
+    email = st.sidebar.text_input("Email", placeholder="Enter email")
+    password = st.sidebar.text_input("Password", type="password", placeholder="Enter password")
+    display_name = st.sidebar.text_input("Display Name", placeholder="Enter your name")  # New field for registration
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("Login"):
+            try:
+                user = auth.get_user_by_email(email)
+                st.session_state["user"] = user.uid
+                st.session_state["display_name"] = db.collection("users").document(user.uid).get().to_dict().get("display_name", email.split("@")[0])
+                st.success("Logged in successfully!")
+            except Exception as e:
+                st.error(f"Login failed: {str(e)}")
+    with col2:
+        if st.button("Register"):
+            try:
+                user = auth.create_user(email=email, password=password)
+                db.collection("users").document(user.uid).set({"email": email, "display_name": display_name or email.split("@")[0]})
+                st.session_state["user"] = user.uid
+                st.session_state["display_name"] = display_name or email.split("@")[0]
+                st.success("Registered and logged in successfully!")
+            except EmailAlreadyExistsError:
+                st.error("Email already exists.")
+            except Exception as e:
+                st.error(f"Registration failed: {str(e)}")
+
+
+def logout():
+    """Handle user logout."""
+    if st.sidebar.button("Logout"):
+        del st.session_state["user"]
+        del st.session_state["display_name"]
+        st.success("Logged out successfully!")
+
+
 def main():
     st.set_page_config(layout="centered")
 
+    # CSS styling (unchanged)
     st.markdown(
         """
         <style>
@@ -47,9 +96,9 @@ def main():
                 margin-bottom: 0 !important;
             }
             .custom-prompt-box {
-                margin-top: 0 !important; /* Remove top margin */
-                margin-bottom: 0 !important; /* Remove bottom margin */
-                padding: 0 !important; /* Remove padding */
+                margin-top: 0 !important;
+                margin-bottom: 0 !important;
+                padding: 0 !important;
             }
             .title-container {
                 display: flex;
@@ -99,11 +148,11 @@ def main():
                 border: 1px solid #e0e0e0;
                 background-color: #f9f9f9;
                 border-radius: 3px;
-                padding: 1px; /* Reduced padding for tighter fit */
+                padding: 1px;
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
                 white-space: pre-wrap;
-                margin-top: 0; /* Remove top margin */
-                margin-bottom: 0; /* Remove bottom margin */
+                margin-top: 0;
+                margin-bottom: 0;
             }
             .stTextArea::placeholder {
                 color: #666;
@@ -120,21 +169,17 @@ def main():
                 margin-bottom: 15px;
                 font-style: italic;
             }
-            /* Remove or hide the label for the text area */
             [data-testid="stWidgetLabel"] {
-                display: none !important; /* Hides the label entirely */
+                display: none !important;
             }
-            /* Ensure no extra space from the container or placeholder */
             .custom-prompt-box .stTextArea {
                 margin: 0 !important;
                 padding: 0 !important;
             }
-            /* Remove column gap in the custom prompt box */
             .custom-prompt-box .stColumns > div {
                 padding: 0 !important;
                 margin: 0 !important;
             }
-            /* Remove margin and padding for headings inside custom-prompt-box */
             .custom-prompt-box .stMarkdown h4 {
                 margin: 0 !important;
                 padding: 0 !important;
@@ -144,6 +189,16 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Authentication handling
+    if "user" not in st.session_state:
+        login()
+        return
+    else:
+        display_name = st.session_state.get("display_name", auth.get_user(st.session_state["user"]).email.split("@")[0])
+        st.sidebar.write(f"Logged in as: {display_name} ({auth.get_user(st.session_state['user']).email})")
+        logout()
+
+    # UI Layout
     col1, col2 = st.columns([1.5, 4.5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
@@ -172,9 +227,9 @@ def main():
     if "custom_prompt" not in st.session_state:
         st.session_state.custom_prompt = ""
 
-    # Remove extra spacing around the custom prompt section
+    # Custom Prompt Section
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
-    label_col, spacer_col, button_col = st.columns([6.5, 1, 2])  # Adjusted column ratio for tighter fit
+    label_col, spacer_col, button_col = st.columns([6.5, 1, 2])
     with label_col:
         st.markdown("#### Enter your custom prompt:")
     with button_col:
@@ -194,13 +249,12 @@ def main():
         if st.button("Sample Prompt", key="sample_prompt", help="Click to insert a sample prompt"):
             st.session_state.custom_prompt = sample_prompt
 
-    # Remove the label and adjust the text area to remove extra space
     custom_prompt = st.text_area(
-        "",  # Empty label to avoid generating a label
+        "",
         height=150,
         placeholder="Please enter a prompt or click 'Sample Prompt' to use the default.",
         value=st.session_state.custom_prompt,
-        label_visibility="hidden",  # Hide the label if present
+        label_visibility="hidden",
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -208,31 +262,38 @@ def main():
     model = st.selectbox("Select model:", model_options)
     model_key = "openai" if "OpenAI" in model else "togetherai"
 
+    # Summarize Button Logic
     if st.button("Summarize"):
         if input_data:
             if not custom_prompt or custom_prompt.strip() == "":
                 st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
             else:
                 with st.spinner("Processing..."):
-                    result = process_input(input_data, model=model_key, custom_prompt=custom_prompt)
+                    result = process_input(input_data, model=model_key, custom_prompt=custom_prompt, user_id=st.session_state["user"], display_name=st.session_state.get("display_name", "Unknown"))
                     if "error" in result:
                         st.warning(f"Failed to process: {result['error']}")
                     else:
                         st.success("Summarization complete!")
-                        st.session_state.all_summaries = st.session_state.get("all_summaries", {})
-                        st.session_state.all_summaries[identifier] = result
-                        st.session_state.last_processed = identifier
+                        st.session_state["last_processed"] = identifier
                         display_summary(result, identifier, use_typewriter=True)
         else:
             st.error("Please provide an input (PDF or URL).")
 
-    if "all_summaries" in st.session_state and st.session_state.all_summaries:
-        st.subheader("Previous Summaries")
-        for iden, summary in st.session_state.all_summaries.items():
-            if iden != st.session_state.get("last_processed", ""):
-                display_summary(summary, iden)
+    # Display Previous Summaries from Firestore
+    st.subheader("Previous Summaries")
+    user_id = st.session_state["user"]
+    summaries_ref = db.collection("users").document(user_id).collection("summaries")
+    docs = summaries_ref.stream()
+    for doc in docs:
+        summary_data = doc.to_dict()
+        identifier = summary_data["identifier"]
+        model_used = summary_data["model"]
+        display_name = summary_data.get("display_name", "Unknown")
+        # Use display_name as the primary identifier in the UI
+        unique_identifier = f"{display_name}'s summary for {identifier} ({model_used})"
+        if identifier != st.session_state.get("last_processed", ""):
+            display_summary({"summary": summary_data["summary"]}, unique_identifier)
 
 
 if __name__ == "__main__":
     main()
-#My name is jayendra phadke
