@@ -32,47 +32,30 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client(database_id="statside-summary")
 
-# Base directory to save processed data
-SAVE_DIR = "saved_data"
-os.makedirs(SAVE_DIR, exist_ok=True)
-
 class TextProcessor:
     def __init__(self, model):
+        self.model = None  # Initialize as None
         if model.lower() == "openai":
-            self.model = "gpt-4o-mini"
             self.openai_api_key = os.getenv('OPENAI_API_KEY')
             if not self.openai_api_key or self.openai_api_key.strip() == "":
                 raise ValueError("OpenAI API key is missing or empty. Set OPENAI_API_KEY in the .env file.")
+            self.model = "gpt-4o-mini"
             self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
         elif model.lower() == "togetherai":
-            self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
             self.together_api_key = os.getenv('TOGETHERAI_API_KEY')
             if not self.together_api_key or self.together_api_key.strip() == "":
                 raise ValueError("TogetherAI API key is missing or empty. Set TOGETHERAI_API_KEY in the .env file.")
+            self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
         else:
             raise ValueError(f"Unsupported model selection: {model}. Use 'openai' or 'togetherai'.")
 
         logging.info(f"OpenAI API Key: {'Set' if hasattr(self, 'openai_api_key') and self.openai_api_key else 'Not Set'}")
         logging.info(f"TogetherAI API Key: {'Set' if hasattr(self, 'together_api_key') and self.together_api_key else 'Not Set'}")
 
-    def get_save_directory(self, base_name):
-        if not base_name or not base_name.strip():
-            raise ValueError("Base name must be specified")
-        folder_path = os.path.join(SAVE_DIR, base_name)
-        try:
-            os.makedirs(folder_path, exist_ok=True)
-        except Exception as e:
-            logging.error(f"Error creating directory {folder_path}: {str(e)}")
-            raise
-        return folder_path
-
     def get_base_name_from_link(self, link):
-        parts = link.split('/')
-        meaningful_parts = [part for part in parts[-4:] if part and part.lower() not in ['pdf', 'html', 'htm']]
-        base_name = '_'.join(meaningful_parts) or '_'.join(parts)
-        base_name = re.sub(r"\.(htm|html|pdf)$", "", base_name, flags=re.IGNORECASE)
-        base_name = re.sub(r"[^\w\-_\. ]", "_", base_name)
-        logging.info(f"Generated base_name: {base_name}")
+        # Use the full URL as base_name, cleaned of special characters
+        base_name = re.sub(r"[^\w\-_\. ]", "_", link)
+        logging.info(f"Using full URL as base_name: {base_name}")
         return base_name or "default_name"
 
     def is_google_cache_link(self, link):
@@ -82,9 +65,9 @@ class TextProcessor:
         clean_text = re.sub(r"\s+", "", text).strip()
         return len(clean_text) < 100
 
-    def process_image_with_tesseract(self, image_path):
+    def process_image_with_tesseract(self, image):
         try:
-            return pytesseract.image_to_string(Image.open(image_path))
+            return pytesseract.image_to_string(image)
         except Exception as e:
             logging.error(f"Error processing image with Tesseract: {str(e)}")
             return ""
@@ -102,26 +85,18 @@ class TextProcessor:
 
     def extract_text_from_pdf(self, pdf_content, link):
         base_name = self.get_base_name_from_link(link)
-        folder = self.get_save_directory(base_name)
         pdf_bytes = pdf_content.read()
         native_text = self.extract_text_from_pdf_native(pdf_bytes)
         if native_text and not self.is_blank_text(native_text):
             logging.info("Native PDF text extraction succeeded.")
             return native_text
+        
         images = convert_from_bytes(pdf_bytes)
         logging.info(f"OCR fallback: converting {len(images)} pages to images.")
         combined_text = ""
 
         def process_page(i, img):
-            img_filename = f"{base_name}_page_{i+1}.png"
-            img_path = os.path.join(folder, img_filename)
-            try:
-                img.save(img_path, 'PNG')
-                logging.info(f"Saved image: {img_path}")
-            except Exception as e:
-                logging.error(f"Failed to save image {img_path}: {str(e)}")
-                return ""
-            return self.process_image_with_tesseract(img_path)
+            return self.process_image_with_tesseract(img)
 
         with ThreadPoolExecutor() as executor:
             results = executor.map(lambda x: process_page(x[0], x[1]), enumerate(images))
@@ -147,30 +122,12 @@ class TextProcessor:
                         return {"text": "", "content_type": None, "error": f"HTTP error {response.status}"}
                     content_type = response.headers.get('Content-Type', '').lower()
                     content = await response.read()
-                    base_name = self.get_base_name_from_link(url)
-                    folder = self.get_save_directory(base_name)
                     if url.lower().endswith('.pdf') or 'application/pdf' in content_type:
-                        pdf_path = os.path.join(folder, f"{base_name}.pdf")
-                        try:
-                            with open(pdf_path, 'wb') as f:
-                                f.write(content)
-                            logging.info(f"Saved PDF: {pdf_path}")
-                        except Exception as e:
-                            logging.error(f"Failed to save PDF {pdf_path}: {str(e)}")
-                            raise
                         text = self.extract_text_from_pdf(io.BytesIO(content), url)
                         if self.is_blank_text(text):
                             return {"text": "", "content_type": "pdf", "error": "blank_pdf"}
                         return {"text": text, "content_type": "pdf", "error": None}
                     elif url.lower().endswith(('.htm', '.html')) or 'text/html' in content_type:
-                        html_path = os.path.join(folder, f"{base_name}.html")
-                        try:
-                            with open(html_path, 'wb') as f:
-                                f.write(content)
-                            logging.info(f"Saved HTML: {html_path}")
-                        except Exception as e:
-                            logging.error(f"Failed to save HTML {html_path}: {str(e)}")
-                            raise
                         text = self.extract_text_from_html(content)
                         if self.is_blank_text(text):
                             return {"text": "", "content_type": "html", "error": "blank_html"}
@@ -188,14 +145,12 @@ class TextProcessor:
 
     def process_uploaded_pdf(self, pdf_file, base_name="uploaded_pdf"):
         try:
-            folder = self.get_save_directory(base_name)
-            pdf_path = os.path.join(folder, f"{base_name}.pdf")
+            # Use full filename if available
+            if hasattr(pdf_file, "name"):
+                base_name = re.sub(r"[^\w\-_\. ]", "_", pdf_file.name)
             pdf_bytes = pdf_file.read()
             if not pdf_bytes:
                 return {"text": "", "content_type": "pdf", "error": "Empty PDF file"}
-            with open(pdf_path, 'wb') as f:
-                f.write(pdf_bytes)
-            logging.info(f"Saved uploaded PDF: {pdf_path}")
 
             native_text = self.extract_text_from_pdf_native(pdf_bytes)
             if native_text and not self.is_blank_text(native_text):
@@ -208,15 +163,7 @@ class TextProcessor:
             combined_text = ""
 
             def process_page(i, img):
-                img_filename = f"{base_name}_page_{i+1}.png"
-                img_path = os.path.join(folder, img_filename)
-                try:
-                    img.save(img_path, 'PNG')
-                    logging.info(f"Saved image: {img_path}")
-                except Exception as e:
-                    logging.error(f"Failed to save image {img_path}: {str(e)}")
-                    return ""
-                return self.process_image_with_tesseract(img_path)
+                return self.process_image_with_tesseract(img)
 
             with ThreadPoolExecutor() as executor:
                 results = executor.map(lambda x: process_page(x[0], x[1]), enumerate(images))
@@ -231,14 +178,11 @@ class TextProcessor:
 
     def process_uploaded_html(self, html_file, base_name="uploaded_html"):
         try:
-            folder = self.get_save_directory(base_name)
-            html_path = os.path.join(folder, f"{base_name}.html")
+            if hasattr(html_file, "name"):
+                base_name = re.sub(r"[^\w\-_\. ]", "_", html_file.name)
             html_bytes = html_file.read()
             if not html_bytes:
                 return {"text": "", "content_type": "html", "error": "Empty HTML file"}
-            with open(html_path, 'wb') as f:
-                f.write(html_bytes)
-            logging.info(f"Saved uploaded HTML: {html_path}")
             text = self.extract_text_from_html(html_bytes)
             if self.is_blank_text(text):
                 return {"text": "", "content_type": "html", "error": "blank_html"}
@@ -266,18 +210,6 @@ class TextProcessor:
                 json_data["h1"].append(para)
         return json_data
 
-    def process_full_text_to_json(self, text, base_name):
-        json_data = self.generate_structured_json(text)
-        base_folder = self.get_save_directory(base_name)
-        json_path = os.path.join(base_folder, f"{base_name}.json")
-        try:
-            with open(json_path, 'w', encoding='utf-8') as json_file:
-                json.dump(json_data, json_file, indent=4)
-            logging.info(f"Saved JSON: {json_path}")
-        except Exception as e:
-            logging.error(f"Error saving JSON: {str(e)}")
-        return text
-
     def truncate_text(self, text, max_tokens=3000):
         encoding = tiktoken.get_encoding("gpt2")
         tokens = encoding.encode(text)
@@ -286,8 +218,8 @@ class TextProcessor:
         return encoding.decode(tokens)
 
     def generate_summary_openai(self, text, custom_prompt):
-        if not self.openai_api_key:
-            raise ValueError("OpenAI API key is not set.")
+        if not hasattr(self, 'openai_api_key') or not self.openai_api_key:
+            raise ValueError("OpenAI API key is not set. Cannot generate summary with OpenAI model.")
         if not custom_prompt or custom_prompt.strip() == "":
             raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
         text = self.truncate_text(text, max_tokens=4000)
@@ -295,6 +227,12 @@ class TextProcessor:
         
         logging.info(f"Sending prompt to OpenAI: {prompt[:100]}...")
         try:
+            # Verify API key validity by making a small test request first
+            self.openai_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -304,13 +242,15 @@ class TextProcessor:
             summary = response.choices[0].message.content.strip()
             logging.info(f"Received summary: {summary[:100]}...")
             return {"summary": summary}
+        except openai.AuthenticationError:
+            raise ValueError("Invalid OpenAI API key provided.")
         except Exception as e:
             logging.error(f"Error generating summary with OpenAI: {str(e)}")
-            return {"summary": f"Error generating summary: {str(e)}"}
+            raise ValueError(f"Error generating summary with OpenAI: {str(e)}")
 
     def generate_summary_togetherai(self, text, custom_prompt):
-        if not self.together_api_key:
-            raise ValueError("TogetherAI API key is not set.")
+        if not hasattr(self, 'together_api_key') or not self.together_api_key:
+            raise ValueError("TogetherAI API key is not set. Cannot generate summary with TogetherAI model.")
         if not custom_prompt or custom_prompt.strip() == "":
             raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
         text = self.truncate_text(text, max_tokens=4000)
@@ -322,31 +262,65 @@ class TextProcessor:
             }
             payload = {
                 "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": "test"}],
                 "temperature": 0.5,
-                "max_tokens": 1500,
+                "max_tokens": 5,
             }
+            # Test API key validity
+            test_response = requests.post("https://api.together.ai/v1/chat/completions", headers=headers, json=payload)
+            if test_response.status_code == 401:
+                raise ValueError("Invalid TogetherAI API key provided.")
+            test_response.raise_for_status()
+
+            # Actual summary generation
+            payload["messages"] = [{"role": "user", "content": prompt}]
+            payload["max_tokens"] = 1500
             response = requests.post("https://api.together.ai/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             summary = response.json()["choices"][0]["message"]["content"].strip()
             logging.info(f"Received TogetherAI summary: {summary[:100]}...")
             return {"summary": summary}
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise ValueError("Invalid TogetherAI API key provided.")
+            logging.error(f"Error generating TogetherAI summary: {str(e)}")
+            raise ValueError(f"Error generating TogetherAI summary: {str(e)}")
         except Exception as e:
             logging.error(f"Error generating TogetherAI summary: {str(e)}")
-            return {"summary": f"Error: {str(e)}"}
+            raise ValueError(f"Error generating TogetherAI summary: {str(e)}")
 
     def generate_summary(self, text, base_name, custom_prompt, user_id, display_name):
         if not custom_prompt or custom_prompt.strip() == "":
             raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
         
-        # Generate new summary
-        logging.debug(f"Generating new summary for {base_name} with prompt: {custom_prompt[:50]}...")
-        if "gpt" in self.model.lower():
-            summary = self.generate_summary_openai(text, custom_prompt)
-        else:
-            summary = self.generate_summary_togetherai(text, custom_prompt)
+        summary_ref = db.collection("users").document(user_id).collection("summaries")
+        
+        docs = summary_ref.where("base_name", "==", base_name).stream()
+        for doc in docs:
+            existing_data = doc.to_dict()
+            if (existing_data.get("custom_prompt") == custom_prompt and 
+                existing_data.get("model") == self.model):
+                summary_id = doc.id
+                logging.info(f"Fetching existing summary for {summary_id} with same file, prompt, and model")
+                return {"summary": existing_data["summary"]}
+        
+        summary_id = f"{base_name}_{int(time.time())}"
+        
+        logging.debug(f"Generating new summary for {base_name} with prompt: {custom_prompt[:50]}... and model: {self.model}")
+        try:
+            if "gpt" in self.model.lower():
+                if not hasattr(self, 'openai_api_key'):
+                    raise ValueError("OpenAI model selected but no OpenAI API key available.")
+                summary = self.generate_summary_openai(text, custom_prompt)
+            else:
+                if not hasattr(self, 'together_api_key'):
+                    raise ValueError("TogetherAI model selected but no TogetherAI API key available.")
+                summary = self.generate_summary_togetherai(text, custom_prompt)
+        except ValueError as e:
+            raise e  # Propagate the specific error up
+        except Exception as e:
+            raise ValueError(f"Unexpected error during summary generation: {str(e)}")
 
-        # Add effective date if present
         if "Error" not in summary["summary"]:
             effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
             match = re.search(effective_date_pattern, text, re.IGNORECASE)
@@ -354,32 +328,19 @@ class TextProcessor:
                 date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
                 summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        # Generate a unique summary ID based on the base_name (identifier)
-        summary_id = re.sub(r"[^\w\-_\.]", "_", base_name)  # Clean the identifier for Firestore
-        summary_ref = db.collection("users").document(user_id).collection("summaries")
-        # Check for uniqueness and append a suffix if necessary
-        counter = 1
-        original_summary_id = summary_id
-        while summary_ref.document(summary_id).get().exists:
-            summary_id = f"{original_summary_id}_{counter}"
-            counter += 1
-
-        # Save to Firestore with the custom summary ID
         try:
             summary_ref.document(summary_id).set({
                 "summary": summary["summary"],
-                "model": self.model,
                 "custom_prompt": custom_prompt,
+                "model": self.model,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                "identifier": base_name,
-                "display_name": display_name
+                "base_name": base_name
             })
-            logging.info(f"Saved new summary to Firestore for {base_name} with display_name: {display_name}, summary_id: {summary_id}")
+            logging.info(f"Saved new summary to Firestore with summary_id: {summary_id}, base_name: {base_name}, model: {self.model}")
         except Exception as e:
             logging.error(f"Failed to save summary to Firestore: {str(e)}")
             raise
 
-        self.process_full_text_to_json(text, base_name)
         return summary
 
 def process_input(input_data, model, custom_prompt, user_id, display_name):

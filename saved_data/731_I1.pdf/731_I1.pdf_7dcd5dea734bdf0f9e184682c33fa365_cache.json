@@ -1,1 +1,0 @@
-{"text_hash": "7dcd5dea734bdf0f9e184682c33fa365", "summary": "Error generating summary: 'TextProcessor' object has no attribute 'openai_client'", "timestamp": 1741007596.3796241, "model": "gpt-4o-mini"}
