@@ -12,7 +12,6 @@ logging.basicConfig(
 )
 
 # Initialize Firebase using Streamlit Cloud secrets only
-# Initialize Firebase using Streamlit Cloud secrets only
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
@@ -59,6 +58,21 @@ def display_summary(summary, identifier, use_typewriter=False):
         else:
             st.markdown(summary["summary"])
         st.write("---")
+
+def get_uploaded_files(user_id):
+    """Fetch previously uploaded files/URLs from Firestore."""
+    try:
+        summaries_ref = db.collection("users").document(user_id).collection("summaries")
+        docs = summaries_ref.stream()
+        uploaded_files = []
+        for doc in docs:
+            data = doc.to_dict()
+            if "base_name" in data:
+                uploaded_files.append(data["base_name"])
+        return uploaded_files
+    except Exception as e:
+        logging.error(f"Error fetching uploaded files: {str(e)}")
+        return []
 
 def main():
     st.set_page_config(layout="centered")
@@ -184,6 +198,17 @@ def main():
         "Select a Stateside bill type, enter a URL, or upload a PDF file to generate a summary."
     )
 
+    # Fetch previously uploaded files/URLs
+    uploaded_files = get_uploaded_files(user_id)
+    if uploaded_files:
+        st.sidebar.markdown("### Previously Uploaded Files/URLs")
+        selected_file = st.sidebar.selectbox("Select a file/URL:", uploaded_files)
+        if selected_file:
+            if selected_file.startswith(("http://", "https://")):
+                st.session_state.selected_url = selected_file
+            else:
+                st.session_state.selected_pdf = selected_file
+
     input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"])
     input_data = None
     identifier = ""
@@ -193,8 +218,11 @@ def main():
             input_data = uploaded_pdf
             identifier = uploaded_pdf.name  # Use full name
             st.success("PDF uploaded successfully!")
+        elif "selected_pdf" in st.session_state:
+            st.info(f"Selected PDF: {st.session_state.selected_pdf}")
+            identifier = st.session_state.selected_pdf
     else:
-        url = st.text_input("Enter the URL of a PDF:", placeholder="Enter bill URL")
+        url = st.text_input("Enter the URL of a PDF:", placeholder="Enter bill URL", value=st.session_state.get("selected_url", ""))
         if url:
             input_data = url
             identifier = url  # Use full URL
