@@ -12,18 +12,28 @@ logging.basicConfig(
 )
 
 # Initialize Firebase using Streamlit Cloud secrets only
+# Initialize Firebase using Streamlit Cloud secrets only
 if not firebase_admin._apps:
     try:
-        if "firebase" in st.secrets and "credentials" in st.secrets["firebase"]:
-            firebase_creds = json.loads(st.secrets["firebase"]["credentials"])
+        if "firebase" in st.secrets:
+            firebase_creds = {
+                "type": st.secrets["firebase"]["type"],
+                "project_id": st.secrets["firebase"]["project_id"],
+                "private_key_id": st.secrets["firebase"]["private_key_id"],
+                "private_key": st.secrets["firebase"]["private_key"].replace("\\n", "\n"),
+                "client_email": st.secrets["firebase"]["client_email"],
+                "client_id": st.secrets["firebase"]["client_id"],
+                "auth_uri": st.secrets["firebase"]["auth_uri"],
+                "token_uri": st.secrets["firebase"]["token_uri"],
+                "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
+                "universe_domain": st.secrets["firebase"]["universe_domain"]
+            }
             cred = credentials.Certificate(firebase_creds)
             firebase_admin.initialize_app(cred)
-            logging.info("Firebase initialized using Streamlit Cloud secrets忌")
+            logging.info("Firebase initialized using Streamlit Cloud secrets")
         else:
-            raise KeyError("Streamlit secrets missing 'firebase.credentials'. Please configure [firebase] section with 'credentials' in secrets.toml.")
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse Firebase credentials JSON: {str(e)}")
-        raise ValueError(f"Invalid Firebase credentials JSON format: {str(e)}")
+            raise KeyError("Streamlit secrets missing 'firebase' section. Please configure [firebase] section in secrets.toml.")
     except Exception as e:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
