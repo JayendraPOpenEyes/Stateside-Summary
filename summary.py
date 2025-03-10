@@ -1,4 +1,3 @@
-import os
 import re
 import io
 import json
@@ -13,40 +12,30 @@ import tiktoken
 from bs4 import BeautifulSoup
 from PIL import Image
 from pdf2image import convert_from_bytes
-from dotenv import load_dotenv
 import pytesseract
 import fitz
 import openai
 import firebase_admin
 from firebase_admin import credentials, firestore
 import streamlit as st  # For accessing secrets on Streamlit Cloud
-
-# Load environment variables from .env file (for local development)
-load_dotenv()
+import os
 
 # Configure logging with DEBUG level for more detail
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize Firebase
+# Initialize Firebase using Streamlit Cloud secrets only
 if not firebase_admin._apps:
     try:
-        # Streamlit Cloud: Load from secrets if available
-        if hasattr(st, "secrets") and "firebase" in st.secrets:
+        if "firebase" in st.secrets and "credentials" in st.secrets["firebase"]:
             firebase_creds = json.loads(st.secrets["firebase"]["credentials"])
             cred = credentials.Certificate(firebase_creds)
+            firebase_admin.initialize_app(cred)
             logging.info("Firebase initialized using Streamlit Cloud secrets")
         else:
-            # Local: Try environment variable first
-            firebase_json = os.getenv("FIREBASE_CREDENTIALS")
-            if firebase_json:
-                firebase_creds = json.loads(firebase_json)
-                cred = credentials.Certificate(firebase_creds)
-                logging.info("Firebase initialized using FIREBASE_CREDENTIALS environment variable")
-            else:
-                # Fallback to local file
-                cred = credentials.Certificate("firebase-adminsdk.json")
-                logging.info("Firebase initialized using local firebase-adminsdk.json file")
-        firebase_admin.initialize_app(cred)
+            raise KeyError("Streamlit secrets missing 'firebase.credentials'. Please configure [firebase] section with 'credentials' in secrets.toml.")
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse Firebase credentials JSON: {str(e)}")
+        raise ValueError(f"Invalid Firebase credentials JSON format: {str(e)}")
     except Exception as e:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
@@ -56,15 +45,21 @@ class TextProcessor:
     def __init__(self, model):
         self.model = None
         if model.lower() == "openai":
-            self.openai_api_key = os.getenv('OPENAI_API_KEY')
-            if not self.openai_api_key or self.openai_api_key.strip() == "":
-                raise ValueError("OpenAI API key is missing or empty. Set OPENAI_API_KEY in the .env file or Streamlit secrets.")
+            try:
+                self.openai_api_key = st.secrets["OPENAI_API_KEY"]
+                if not self.openai_api_key or self.openai_api_key.strip() == "":
+                    raise KeyError
+            except KeyError:
+                raise ValueError("OPENAI_API_KEY is missing or empty in Streamlit secrets.")
             self.model = "gpt-4o-mini"
             self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
         elif model.lower() == "togetherai":
-            self.together_api_key = os.getenv('TOGETHERAI_API_KEY')
-            if not self.together_api_key or self.together_api_key.strip() == "":
-                raise ValueError("TogetherAI API key is missing or empty. Set TOGETHERAI_API_KEY in the .env file or Streamlit secrets.")
+            try:
+                self.together_api_key = st.secrets["TOGETHERAI_API_KEY"]
+                if not self.together_api_key or self.together_api_key.strip() == "":
+                    raise KeyError
+            except KeyError:
+                raise ValueError("TOGETHERAI_API_KEY is missing or empty in Streamlit secrets.")
             self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
         else:
             raise ValueError(f"Unsupported model selection: {model}. Use 'openai' or 'togetherai'.")

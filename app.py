@@ -5,37 +5,25 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file (for local development)
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Initialize Firebase
+# Initialize Firebase using Streamlit Cloud secrets only
 if not firebase_admin._apps:
     try:
-        # Streamlit Cloud: Load from secrets if available
-        if hasattr(st, "secrets") and "firebase" in st.secrets:
+        if "firebase" in st.secrets and "credentials" in st.secrets["firebase"]:
             firebase_creds = json.loads(st.secrets["firebase"]["credentials"])
             cred = credentials.Certificate(firebase_creds)
-            logging.info("Firebase initialized using Stream subjectinglit Cloud secrets")
+            firebase_admin.initialize_app(cred)
+            logging.info("Firebase initialized using Streamlit Cloud secrets忌")
         else:
-            # Local: Try environment variable first
-            firebase_json = os.getenv("FIREBASE_CREDENTIALS")
-            if firebase_json:
-                firebase_creds = json.loads(firebase_json)
-                cred = credentials.Certificate(firebase_creds)
-                logging.info("Firebase initialized using FIREBASE_CREDENTIALS environment variable")
-            else:
-                # Fallback to local file
-                cred = credentials.Certificate("firebase-adminsdk.json")
-                logging.info("Firebase initialized using local firebase-adminsdk.json file")
-        firebase_admin.initialize_app(cred)
+            raise KeyError("Streamlit secrets missing 'firebase.credentials'. Please configure [firebase] section with 'credentials' in secrets.toml.")
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse Firebase credentials JSON: {str(e)}")
+        raise ValueError(f"Invalid Firebase credentials JSON format: {str(e)}")
     except Exception as e:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
