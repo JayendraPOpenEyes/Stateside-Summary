@@ -19,8 +19,9 @@ import fitz
 import openai
 import firebase_admin
 from firebase_admin import credentials, firestore
+import streamlit as st  # For accessing secrets on Streamlit Cloud
 
-# Load environment variables from .env file
+# Load environment variables from .env file (for local development)
 load_dotenv()
 
 # Configure logging with DEBUG level for more detail
@@ -28,23 +29,42 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 
 # Initialize Firebase
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)
+    try:
+        # Streamlit Cloud: Load from secrets if available
+        if hasattr(st, "secrets") and "firebase" in st.secrets:
+            firebase_creds = json.loads(st.secrets["firebase"]["credentials"])
+            cred = credentials.Certificate(firebase_creds)
+            logging.info("Firebase initialized using Streamlit Cloud secrets")
+        else:
+            # Local: Try environment variable first
+            firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+            if firebase_json:
+                firebase_creds = json.loads(firebase_json)
+                cred = credentials.Certificate(firebase_creds)
+                logging.info("Firebase initialized using FIREBASE_CREDENTIALS environment variable")
+            else:
+                # Fallback to local file
+                cred = credentials.Certificate("firebase-adminsdk.json")
+                logging.info("Firebase initialized using local firebase-adminsdk.json file")
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        logging.error(f"Failed to initialize Firebase: {str(e)}")
+        raise
 db = firestore.client(database_id="statside-summary")
 
 class TextProcessor:
     def __init__(self, model):
-        self.model = None  # Initialize as None
+        self.model = None
         if model.lower() == "openai":
             self.openai_api_key = os.getenv('OPENAI_API_KEY')
             if not self.openai_api_key or self.openai_api_key.strip() == "":
-                raise ValueError("OpenAI API key is missing or empty. Set OPENAI_API_KEY in the .env file.")
+                raise ValueError("OpenAI API key is missing or empty. Set OPENAI_API_KEY in the .env file or Streamlit secrets.")
             self.model = "gpt-4o-mini"
             self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
         elif model.lower() == "togetherai":
             self.together_api_key = os.getenv('TOGETHERAI_API_KEY')
             if not self.together_api_key or self.together_api_key.strip() == "":
-                raise ValueError("TogetherAI API key is missing or empty. Set TOGETHERAI_API_KEY in the .env file.")
+                raise ValueError("TogetherAI API key is missing or empty. Set TOGETHERAI_API_KEY in the .env file or Streamlit secrets.")
             self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
         else:
             raise ValueError(f"Unsupported model selection: {model}. Use 'openai' or 'togetherai'.")
@@ -53,7 +73,6 @@ class TextProcessor:
         logging.info(f"TogetherAI API Key: {'Set' if hasattr(self, 'together_api_key') and self.together_api_key else 'Not Set'}")
 
     def get_base_name_from_link(self, link):
-        # Use the full URL as base_name, cleaned of special characters
         base_name = re.sub(r"[^\w\-_\. ]", "_", link)
         logging.info(f"Using full URL as base_name: {base_name}")
         return base_name or "default_name"
@@ -145,7 +164,6 @@ class TextProcessor:
 
     def process_uploaded_pdf(self, pdf_file, base_name="uploaded_pdf"):
         try:
-            # Use full filename if available
             if hasattr(pdf_file, "name"):
                 base_name = re.sub(r"[^\w\-_\. ]", "_", pdf_file.name)
             pdf_bytes = pdf_file.read()
@@ -227,12 +245,6 @@ class TextProcessor:
         
         logging.info(f"Sending prompt to OpenAI: {prompt[:100]}...")
         try:
-            # Verify API key validity by making a small test request first
-            self.openai_client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=5
-            )
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -244,9 +256,12 @@ class TextProcessor:
             return {"summary": summary}
         except openai.AuthenticationError:
             raise ValueError("Invalid OpenAI API key provided.")
+        except openai.OpenAIError as e:
+            logging.error(f"OpenAI API error: {str(e)}")
+            raise ValueError(f"OpenAI API error: {str(e)}")
         except Exception as e:
-            logging.error(f"Error generating summary with OpenAI: {str(e)}")
-            raise ValueError(f"Error generating summary with OpenAI: {str(e)}")
+            logging.error(f"Unexpected error with OpenAI: {str(e)}")
+            raise ValueError(f"Unexpected error generating summary with OpenAI: {str(e)}")
 
     def generate_summary_togetherai(self, text, custom_prompt):
         if not hasattr(self, 'together_api_key') or not self.together_api_key:
@@ -262,32 +277,23 @@ class TextProcessor:
             }
             payload = {
                 "model": self.model,
-                "messages": [{"role": "user", "content": "test"}],
+                "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.5,
-                "max_tokens": 5,
+                "max_tokens": 1500,
             }
-            # Test API key validity
-            test_response = requests.post("https://api.together.ai/v1/chat/completions", headers=headers, json=payload)
-            if test_response.status_code == 401:
-                raise ValueError("Invalid TogetherAI API key provided.")
-            test_response.raise_for_status()
-
-            # Actual summary generation
-            payload["messages"] = [{"role": "user", "content": prompt}]
-            payload["max_tokens"] = 1500
             response = requests.post("https://api.together.ai/v1/chat/completions", headers=headers, json=payload)
+            if response.status_code == 401:
+                raise ValueError("Invalid TogetherAI API key provided.")
             response.raise_for_status()
             summary = response.json()["choices"][0]["message"]["content"].strip()
             logging.info(f"Received TogetherAI summary: {summary[:100]}...")
             return {"summary": summary}
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                raise ValueError("Invalid TogetherAI API key provided.")
-            logging.error(f"Error generating TogetherAI summary: {str(e)}")
-            raise ValueError(f"Error generating TogetherAI summary: {str(e)}")
+            logging.error(f"TogetherAI HTTP error: {str(e)}")
+            raise ValueError(f"TogetherAI API error: {str(e)}")
         except Exception as e:
-            logging.error(f"Error generating TogetherAI summary: {str(e)}")
-            raise ValueError(f"Error generating TogetherAI summary: {str(e)}")
+            logging.error(f"Unexpected error with TogetherAI: {str(e)}")
+            raise ValueError(f"Unexpected error generating summary with TogetherAI: {str(e)}")
 
     def generate_summary(self, text, base_name, custom_prompt, user_id, display_name):
         if not custom_prompt or custom_prompt.strip() == "":
@@ -317,7 +323,7 @@ class TextProcessor:
                     raise ValueError("TogetherAI model selected but no TogetherAI API key available.")
                 summary = self.generate_summary_togetherai(text, custom_prompt)
         except ValueError as e:
-            raise e  # Propagate the specific error up
+            raise e
         except Exception as e:
             raise ValueError(f"Unexpected error during summary generation: {str(e)}")
 

@@ -4,6 +4,12 @@ import logging
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore
+import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (for local development)
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -12,8 +18,27 @@ logging.basicConfig(
 
 # Initialize Firebase
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)
+    try:
+        # Streamlit Cloud: Load from secrets if available
+        if hasattr(st, "secrets") and "firebase" in st.secrets:
+            firebase_creds = json.loads(st.secrets["firebase"]["credentials"])
+            cred = credentials.Certificate(firebase_creds)
+            logging.info("Firebase initialized using Stream subjectinglit Cloud secrets")
+        else:
+            # Local: Try environment variable first
+            firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+            if firebase_json:
+                firebase_creds = json.loads(firebase_json)
+                cred = credentials.Certificate(firebase_creds)
+                logging.info("Firebase initialized using FIREBASE_CREDENTIALS environment variable")
+            else:
+                # Fallback to local file
+                cred = credentials.Certificate("firebase-adminsdk.json")
+                logging.info("Firebase initialized using local firebase-adminsdk.json file")
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        logging.error(f"Failed to initialize Firebase: {str(e)}")
+        raise
 db = firestore.client(database_id="statside-summary")
 
 def typewriter_effect(text, placeholder, delay=0.005):
@@ -209,7 +234,7 @@ def main():
         label_visibility="hidden",
     )
     st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("#### Choose Model:")
+
     model_options = ["OpenAI (GPT-4o-mini)", "TogetherAI (LLaMA)"]
     model = st.selectbox("Select model:", model_options)
     model_key = "openai" if "OpenAI" in model else "togetherai"
