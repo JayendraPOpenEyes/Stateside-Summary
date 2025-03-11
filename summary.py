@@ -300,60 +300,63 @@ class TextProcessor:
             logging.error(f"Unexpected error with TogetherAI: {str(e)}")
             raise ValueError(f"Unexpected error generating summary with TogetherAI: {str(e)}")
 
-    def generate_summary(self, text, base_name, custom_prompt, user_id, display_name):
-        if not custom_prompt or custom_prompt.strip() == "":
-            raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
-        
-        summary_ref = db.collection("users").document(user_id).collection("summaries")
-        
-        docs = summary_ref.where("base_name", "==", base_name).stream()
-        for doc in docs:
-            existing_data = doc.to_dict()
-            if (existing_data.get("custom_prompt") == custom_prompt and 
-                existing_data.get("model") == self.model):
-                summary_id = doc.id
-                logging.info(f"Fetching existing summary for {summary_id} with same file, prompt, and model")
-                return {"summary": existing_data["summary"]}
-        
-        summary_id = f"{base_name}_{int(time.time())}"
-        
-        logging.debug(f"Generating new summary for {base_name} with prompt: {custom_prompt[:50]}... and model: {self.model}")
-        try:
-            if "gpt" in self.model.lower():
-                if not hasattr(self, 'openai_api_key'):
-                    raise ValueError("OpenAI model selected but no OpenAI API key available.")
-                summary = self.generate_summary_openai(text, custom_prompt)
-            else:
-                if not hasattr(self, 'together_api_key'):
-                    raise ValueError("TogetherAI model selected but no TogetherAI API key available.")
-                summary = self.generate_summary_togetherai(text, custom_prompt)
-        except ValueError as e:
-            raise e
-        except Exception as e:
-            raise ValueError(f"Unexpected error during summary generation: {str(e)}")
+def generate_summary(self, text, base_name, custom_prompt, user_id, display_name):
+    if not custom_prompt or custom_prompt.strip() == "":
+        raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
+    
+    summary_ref = db.collection("users").document(user_id).collection("summaries")
+    
+    docs = summary_ref.where("base_name", "==", base_name).stream()
+    for doc in docs:
+        existing_data = doc.to_dict()
+        if (existing_data.get("custom_prompt") == custom_prompt and 
+            existing_data.get("model") == self.model):
+            summary_id = doc.id
+            logging.info(f"Fetching existing summary for {summary_id} with same file, prompt, and model")
+            return {"summary": existing_data["summary"], "input_data": existing_data.get("input_data", "")}
+    
+    summary_id = f"{base_name}_{int(time.time())}"
+    
+    logging.debug(f"Generating new summary for {base_name} with prompt: {custom_prompt[:50]}... and model: {self.model}")
+    try:
+        if "gpt" in self.model.lower():
+            if not hasattr(self, 'openai_api_key'):
+                raise ValueError("OpenAI model selected but no OpenAI API key available.")
+            summary = self.generate_summary_openai(text, custom_prompt)
+        else:
+            if not hasattr(self, 'together_api_key'):
+                raise ValueError("TogetherAI model selected but no TogetherAI API key available.")
+            summary = self.generate_summary_togetherai(text, custom_prompt)
+    except ValueError as e:
+        raise e
+    except Exception as e:
+        raise ValueError(f"Unexpected error during summary generation: {str(e)}")
 
-        if "Error" not in summary["summary"]:
-            effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
-            match = re.search(effective_date_pattern, text, re.IGNORECASE)
-            if match:
-                date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
-                summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
+    if "Error" not in summary["summary"]:
+        effective_date_pattern = r"(effective\s+(?:date\s*(?:is|of|:)?|on)|takes\s+effect\s+(?:on)?)\s*[:\s]*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"
+        match = re.search(effective_date_pattern, text, re.IGNORECASE)
+        if match:
+            date_str = match.group(0).split(":", 1)[-1].strip() if ":" in match.group(0) else match.group(0).split("on", 1)[-1].strip() if "on" in match.group(0) else match.group(0).split("effect", 1)[-1].strip()
+            summary["summary"] += f"\nThis measure has an effective date of: {date_str}"
 
-        try:
-            summary_ref.document(summary_id).set({
-                "summary": summary["summary"],
-                "custom_prompt": custom_prompt,
-                "model": self.model,
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "base_name": base_name
-            })
-            logging.info(f"Saved new summary to Firestore with summary_id: {summary_id}, base_name: {base_name}, model: {self.model}")
-        except Exception as e:
-            logging.error(f"Failed to save summary to Firestore: {str(e)}")
-            raise
+    # Determine input_data to store (URL or file name)
+    input_data = base_name if base_name.startswith(("http://", "https://")) else base_name
 
-        return summary
+    try:
+        summary_ref.document(summary_id).set({
+            "summary": summary["summary"],
+            "custom_prompt": custom_prompt,
+            "model": self.model,
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "base_name": base_name,
+            "input_data": input_data  # Store the URL or file name
+        })
+        logging.info(f"Saved new summary to Firestore with summary_id: {summary_id}, base_name: {base_name}, model: {self.model}")
+    except Exception as e:
+        logging.error(f"Failed to save summary to Firestore: {str(e)}")
+        raise
 
+    return {"summary": summary["summary"], "input_data": input_data}
 def process_input(input_data, model, custom_prompt, user_id, display_name):
     try:
         processor = TextProcessor(model=model)
@@ -371,18 +374,20 @@ def process_input(input_data, model, custom_prompt, user_id, display_name):
             if result["error"]:
                 return {"error": result["error"], "model": model}
             clean_text = processor.preprocess_text(result["text"])
+            input_data_str = base_name  # Store file name as input_data
         elif isinstance(input_data, str) and input_data.startswith(("http://", "https://")):
             result = asyncio.run(processor.async_extract_text_from_url(input_data))
             if result["error"]:
                 return {"error": result["error"], "model": model}
             clean_text = processor.preprocess_text(result["text"])
             base_name = processor.get_base_name_from_link(input_data)
+            input_data_str = input_data  # Store URL as input_data
         else:
             return {"error": "Invalid input type. Expected URL, PDF, or HTML file.", "model": model}
 
         logging.debug(f"Calling generate_summary with base_name={base_name}, custom_prompt={custom_prompt[:50]}...")
         summary = processor.generate_summary(clean_text, base_name, custom_prompt, user_id, display_name)
-        return {"model": model, "summary": summary["summary"]}
+        return {"model": model, "summary": summary["summary"], "input_data": input_data_str}
     except ValueError as ve:
         logging.error(f"ValueError processing input: {str(ve)}")
         return {"error": f"ValueError: {str(ve)}", "model": model}

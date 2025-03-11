@@ -60,24 +60,29 @@ def display_summary(summary, identifier, use_typewriter=False):
         st.write("---")
 
 def get_uploaded_files(user_id):
-    """Fetch previously uploaded files/URLs from Firestore."""
+    """Fetch previously uploaded files/URLs and their details from Firestore."""
     try:
         summaries_ref = db.collection("users").document(user_id).collection("summaries")
         docs = summaries_ref.stream()
-        uploaded_files = []
+        uploaded_files = {}
         for doc in docs:
             data = doc.to_dict()
             if "base_name" in data:
-                uploaded_files.append(data["base_name"])
+                uploaded_files[data["base_name"]] = {
+                    "input_data": data.get("input_data", ""),
+                    "summary": data.get("summary", ""),
+                    "custom_prompt": data.get("custom_prompt", ""),
+                    "model": data.get("model", "")
+                }
         return uploaded_files
     except Exception as e:
         logging.error(f"Error fetching uploaded files: {str(e)}")
-        return []
+        return {}
 
 def main():
     st.set_page_config(layout="centered")
 
-    # CSS styling (unchanged)
+    # CSS styling
     st.markdown(
         """
         <style>
@@ -198,18 +203,28 @@ def main():
         "Select a Stateside bill type, enter a URL, or upload a PDF file to generate a summary."
     )
 
-    # Fetch previously uploaded files/URLs
+    # Fetch previously uploaded files/URLs with details
     uploaded_files = get_uploaded_files(user_id)
     if uploaded_files:
         st.sidebar.markdown("### Previously Uploaded Files/URLs")
-        selected_file = st.sidebar.selectbox("Select a file/URL:", uploaded_files)
+        selected_file = st.sidebar.selectbox("Select a file/URL:", list(uploaded_files.keys()))
         if selected_file:
-            if selected_file.startswith(("http://", "https://")):
-                st.session_state.selected_url = selected_file
+            selected_data = uploaded_files[selected_file]
+            input_data = selected_data["input_data"]
+            if input_data.startswith(("http://", "https://")):
+                st.session_state.selected_url = input_data
+                input_type_default = "Enter URL"
             else:
-                st.session_state.selected_pdf = selected_file
+                st.session_state.selected_pdf = input_data
+                input_type_default = "Upload PDF"
+            # Instantly display the previous summary
+            display_summary({"summary": selected_data["summary"]}, selected_file, use_typewriter=False)
+            st.session_state.custom_prompt = selected_data["custom_prompt"]
+            st.session_state.selected_model = "OpenAI (GPT-4o-mini)" if selected_data["model"] == "gpt-4o-mini" else "TogetherAI (LLaMA)"
+    else:
+        input_type_default = "Upload PDF"
 
-    input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"])
+    input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"], index=0 if input_type_default == "Upload PDF" else 1)
     input_data = None
     identifier = ""
     if input_type == "Upload PDF":
@@ -262,7 +277,7 @@ def main():
     st.markdown("</div>", unsafe_allow_html=True)
 
     model_options = ["OpenAI (GPT-4o-mini)", "TogetherAI (LLaMA)"]
-    model = st.selectbox("Select model:", model_options)
+    model = st.selectbox("Select model:", model_options, index=model_options.index(st.session_state.get("selected_model", "OpenAI (GPT-4o-mini)")))
     model_key = "openai" if "OpenAI" in model else "togetherai"
 
     # Summarize Button Logic
@@ -285,6 +300,12 @@ def main():
                         st.success("Summarization complete!")
                         st.session_state["last_processed"] = identifier
                         display_summary(result, identifier, use_typewriter=True)
+                        # Update session state with new input
+                        if input_type == "Enter URL":
+                            st.session_state.selected_url = input_data
+                        else:
+                            st.session_state.selected_pdf = identifier
+                        st.session_state.selected_model = model
         else:
             st.error("Please provide an input (PDF or URL).")
 
