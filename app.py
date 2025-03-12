@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from summary import process_input
 import logging
 import time
@@ -74,7 +73,7 @@ def typewriter_effect(text, placeholder, delay=0.005):
         time.sleep(delay)
 
 def display_summary(summary, identifier, use_typewriter=False):
-    """Display the summary (download button removed)."""
+    """Display the summary (download button and PDF preview removed)."""
     with st.expander(f"Summary for {identifier}", expanded=True):
         st.subheader("Summary")
         if "Error" in summary["summary"]:
@@ -85,11 +84,6 @@ def display_summary(summary, identifier, use_typewriter=False):
         else:
             st.markdown(summary["summary"])
         st.write("---")
-
-def display_pdf_preview(file_url, identifier):
-    """Embed the PDF preview using an iframe."""
-    st.markdown(f"### PDF Preview: {identifier}")
-    components.iframe(file_url, height=600, scrolling=True)
 
 def get_uploaded_files(user_id):
     """Fetch previously uploaded files/URLs and their details from Firestore."""
@@ -118,7 +112,8 @@ def upload_to_storage(file, file_name, user_id):
         blob = bucket.blob(f"users/{user_id}/{file_name}")
         file.seek(0)
         blob.upload_from_file(file, content_type="application/pdf")
-        download_url = blob.public_url  # Public URL for simplicity
+        # Use public_url or a signed URL as per your needs
+        download_url = blob.public_url  
         logging.info(f"Uploaded {file_name} to Firebase Storage: {download_url}")
         return download_url
     except Exception as e:
@@ -271,7 +266,6 @@ def main():
                 st.success("PDF uploaded successfully!")
             else:
                 st.info(f"File '{identifier}' already exists. It will be used from your previous uploads.")
-                # For existing files, use the stored file_url for processing
                 record = uploaded_files.get(identifier, {})
                 file_url = record.get("file_url", "")
                 input_data = file_url  # Process as a URL
@@ -294,8 +288,7 @@ def main():
                 record = uploaded_files.get(choice, {})
                 identifier = choice
                 file_url = record.get("file_url", "")
-                # Use file_url as input_data so that process_input treats it as a URL
-                input_data = file_url
+                input_data = file_url  # Use stored URL for processing
                 st.info(f"Selected file: {choice}")
         else:
             st.warning("No previously uploaded files available. Please upload a PDF first.")
@@ -395,10 +388,6 @@ def main():
                             st.session_state.selected_pdf = identifier
         else:
             st.error("Please provide an input (PDF, URL, or choose a previously uploaded file).")
-    
-    # Display PDF preview for uploads or chosen files (skip preview for Enter URL)
-    if input_type != "Enter URL" and file_url:
-        display_pdf_preview(file_url, identifier)
 
 if __name__ == "__main__":
     main()
