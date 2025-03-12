@@ -119,7 +119,7 @@ def upload_to_storage(file, file_name, user_id):
         raise
 
 def main():
-    st.set_page_config(layout="centered")
+    st.set_page_config(layout="wide")
 
     # CSS styling (adjust as needed)
     st.markdown(
