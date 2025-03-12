@@ -29,20 +29,49 @@ if not firebase_admin._apps:
                 "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
                 "universe_domain": st.secrets["firebase"]["universe_domain"]
             }
+            # Use the provided bucket name, fallback to secrets if available
+            bucket_name = f"{st.secrets['firebase']['project_id']}.appspot.com" if "project_id" in st.secrets["firebase"] else "project-astra-438804.appspot.com"
             cred = credentials.Certificate(firebase_creds)
             firebase_admin.initialize_app(cred, {
-                'storageBucket': f"{st.secrets['firebase']['project_id']}.appspot.com"
+                'storageBucket': bucket_name
             })
-            logging.info("Firebase initialized using Streamlit Cloud secrets")
+            logging.info(f"Firebase initialized with storage bucket: {bucket_name}")
         else:
-            raise KeyError("Streamlit secrets missing 'firebase' section. Please configure [firebase] section in secrets.toml.")
+            # Fallback to hardcoded bucket name if secrets are missing
+            bucket_name = "project-astra-438804.appspot.com"
+            cred = credentials.Certificate({
+                # You’d need to provide these locally if secrets are missing
+                "type": "service_account",
+                "project_id": "project-astra-438804",
+                "private_key_id": "your-private-key-id",
+                "private_key": "your-private-key",
+                "client_email": "your-client-email",
+                "client_id": "your-client-id",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": "your-client-x509-cert-url",
+                "universe_domain": "googleapis.com"
+            })
+            firebase_admin.initialize_app(cred, {
+                'storageBucket': bucket_name
+            })
+            logging.warning("Streamlit secrets missing 'firebase' section. Using hardcoded credentials (update for production).")
     except Exception as e:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
 
 # Firestore and Storage clients
 db = firestore.client(database_id="statside-summary")
-bucket = storage.bucket()
+try:
+    bucket = storage.bucket(name="project-astra-438804.appspot.com")  # Explicitly specify the bucket name
+    # Test bucket access
+    bucket.list_blobs(max_results=1)
+    logging.info("Firebase Storage bucket successfully accessed.")
+except Exception as e:
+    logging.error(f"Firebase Storage not accessible: {str(e)}. Ensure Storage is enabled in Firebase Console.")
+    st.error("Firebase Storage is not enabled or configured correctly. Please enable it in the Firebase Console.")
+    st.stop()
 
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""
@@ -64,12 +93,18 @@ def display_summary(summary, identifier, use_typewriter=False, file_url=None):
         else:
             st.markdown(summary["summary"])
         if file_url and not identifier.startswith(("http://", "https://")):
-            st.download_button(
-                label="Download Original PDF",
-                data=file_url,
-                file_name=identifier,
-                mime="application/pdf"
-            )
+            # Fetch the file from Firebase Storage for download
+            blob = bucket.blob(f"users/{st.session_state.get('user_id', 'guest_user')}/{identifier}")
+            try:
+                file_bytes = blob.download_as_bytes()
+                st.download_button(
+                    label="Download Original PDF",
+                    data=file_bytes,
+                    file_name=identifier,
+                    mime="application/pdf"
+                )
+            except Exception as e:
+                st.warning(f"Could not retrieve PDF: {str(e)}")
         st.write("---")
 
 def get_uploaded_files(user_id):
@@ -86,7 +121,7 @@ def get_uploaded_files(user_id):
                     "summary": data.get("summary", ""),
                     "custom_prompt": data.get("custom_prompt", ""),
                     "model": data.get("model", ""),
-                    "file_url": data.get("file_url", "")  # URL or file path in Storage
+                    "file_url": data.get("file_url", "")
                 }
         return uploaded_files
     except Exception as e:
@@ -219,6 +254,7 @@ def main():
     # No authentication - directly show summarization interface
     display_name = "Guest"  # Default display name
     user_id = "guest_user"  # Default user ID
+    st.session_state.user_id = user_id  # Store user_id in session state for use in display_summary
 
     # UI Layout
     col1, col2 = st.columns([1.5, 4.5])
@@ -328,7 +364,8 @@ def main():
                         model=model_key,
                         custom_prompt=custom_prompt,
                         user_id=user_id,
-                        display_name=display_name
+                        display_name=display_name,
+                        file_url=file_url
                     )
                     if "error" in result:
                         st.warning(f"Failed to process: {result['error']}")
