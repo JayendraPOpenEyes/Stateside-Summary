@@ -4,6 +4,7 @@ import logging
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
+from datetime import timedelta
 from io import BytesIO
 
 # Configure logging
@@ -11,7 +12,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Initialize Firebase using Streamlit Cloud secrets
+# Initialize Firebase using Streamlit Cloud secrets or fallback credentials
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
@@ -35,7 +36,7 @@ if not firebase_admin._apps:
             })
             logging.info(f"Firebase initialized with storage bucket: {bucket_name}")
         else:
-            # Hardcoded fallback for your project
+            # Fallback credentials (update for production)
             bucket_name = "project-astra-438804.appspot.com"
             cred = credentials.Certificate({
                 "type": "service_account",
@@ -71,7 +72,7 @@ def typewriter_effect(text, placeholder, delay=0.005):
         time.sleep(delay)
 
 def display_summary(summary, identifier, use_typewriter=False):
-    """Display the generated summary (download and preview removed)."""
+    """Display the generated summary."""
     with st.expander(f"Summary for {identifier}", expanded=True):
         st.subheader("Summary")
         if "Error" in summary["summary"]:
@@ -85,29 +86,32 @@ def display_summary(summary, identifier, use_typewriter=False):
 
 def list_uploaded_files(user_id):
     """
-    List the uploaded PDF files for a user from Firebase Storage.
-    Files are stored under the path "users/{user_id}/" in the bucket.
-    Returns a dictionary with file names as keys and file URLs as values.
+    List PDF files for a user from Firebase Storage.
+    Generates a signed URL for each file valid for 1 hour.
+    Returns a dictionary with file names as keys and signed URLs as values.
     """
     prefix = f"users/{user_id}/"
     blobs = bucket.list_blobs(prefix=prefix)
     files = {}
     for blob in blobs:
-        # Remove the user folder prefix to get the file name.
+        # Remove the prefix to get just the file name.
         file_name = blob.name.replace(prefix, "", 1)
         if file_name:
-            # Use the public URL (or generate a signed URL if needed).
-            file_url = blob.public_url
+            # Generate a signed URL valid for 1 hour.
+            file_url = blob.generate_signed_url(expiration=timedelta(hours=1))
             files[file_name] = file_url
     return files
 
 def upload_to_storage(file, file_name, user_id):
-    """Upload a file to Firebase Storage and return its download URL."""
+    """
+    Upload a PDF to Firebase Storage under the user's folder and
+    return a signed URL valid for 1 hour.
+    """
     try:
         blob = bucket.blob(f"users/{user_id}/{file_name}")
         file.seek(0)
         blob.upload_from_file(file, content_type="application/pdf")
-        download_url = blob.public_url  # Use public_url or generate a signed URL if needed.
+        download_url = blob.generate_signed_url(expiration=timedelta(hours=1))
         logging.info(f"Uploaded {file_name} to Firebase Storage: {download_url}")
         return download_url
     except Exception as e:
@@ -117,7 +121,7 @@ def upload_to_storage(file, file_name, user_id):
 def main():
     st.set_page_config(layout="centered")
 
-    # CSS styling
+    # CSS styling (adjust as needed)
     st.markdown(
         """
         <style>
@@ -146,12 +150,12 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # No authentication - directly show summarization interface
+    # Set up user and session state
     display_name = "Guest"
     user_id = "guest_user"
     st.session_state.user_id = user_id
 
-    # Header UI layout
+    # Header layout
     col1, col2 = st.columns([1.5, 4.5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
@@ -165,7 +169,7 @@ def main():
     # List previously uploaded PDFs from Firebase Storage
     uploaded_files = list_uploaded_files(user_id)
 
-    # Input type selection with three options
+    # Input type selection: Upload PDF, Enter URL, or Choose previously uploaded file.
     input_type = st.selectbox("Select input type:", 
                               options=["Upload PDF", "Enter URL", "Choose previously uploaded file"])
 
@@ -177,18 +181,14 @@ def main():
         uploaded_pdf = st.file_uploader("Upload a PDF file", type=["pdf"])
         if uploaded_pdf:
             identifier = uploaded_pdf.name
-            # If file not already uploaded, proceed with upload and summary generation
+            # If not already in storage, use the uploaded file to generate a signed URL.
             if identifier not in uploaded_files:
                 input_data = uploaded_pdf
                 st.success("PDF uploaded successfully!")
             else:
                 st.info(f"File '{identifier}' already exists. It will be used from your previous uploads.")
                 file_url = uploaded_files.get(identifier, "")
-                input_data = file_url  # Process as a URL
-        elif "selected_pdf" in st.session_state:
-            st.info(f"Selected PDF: {st.session_state.selected_pdf}")
-            identifier = st.session_state.selected_pdf
-
+                input_data = file_url  # Process as a URL.
     elif input_type == "Enter URL":
         url = st.text_input("Enter the URL of a PDF:", 
                             placeholder="Enter bill URL", 
@@ -196,14 +196,13 @@ def main():
         if url:
             input_data = url
             identifier = url
-
     elif input_type == "Choose previously uploaded file":
         if uploaded_files:
             choice = st.selectbox("Select a previously uploaded file:", list(uploaded_files.keys()))
             if choice:
                 identifier = choice
                 file_url = uploaded_files.get(choice, "")
-                input_data = file_url  # Use the stored file URL for processing
+                input_data = file_url  # Use the stored signed URL.
                 st.info(f"Selected file: {choice}")
         else:
             st.warning("No previously uploaded files available. Please upload a PDF first.")
@@ -249,7 +248,7 @@ def main():
                 st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
             else:
                 with st.spinner("Processing..."):
-                    # For uploads, ensure file is uploaded and pointer reset
+                    # If a file was uploaded, generate its signed URL.
                     if input_type == "Upload PDF" and hasattr(input_data, "read"):
                         file_url = upload_to_storage(input_data, identifier, user_id)
                         input_data.seek(0)
@@ -264,7 +263,7 @@ def main():
                         file_url=file_url
                     )
                     
-                    # If file was uploaded, reset pointer before next processing
+                    # Reset pointer if necessary.
                     if input_type == "Upload PDF" and hasattr(input_data, "seek"):
                         input_data.seek(0)
                     
@@ -278,13 +277,13 @@ def main():
                         file_url=file_url
                     )
                     
-                    # Display errors if any
+                    # Display errors if any.
                     if "error" in result_openai:
                         st.warning(f"OpenAI failed: {result_openai['error']}")
                     if "error" in result_togetherai:
                         st.warning(f"TogetherAI failed: {result_togetherai['error']}")
                     
-                    # If at least one summary succeeded, show both side by side
+                    # If at least one summary succeeded, show both side by side.
                     if "error" not in result_openai or "error" not in result_togetherai:
                         st.success("Summarization complete!")
                         st.session_state["last_processed"] = identifier
@@ -296,7 +295,7 @@ def main():
                             st.header("TogetherAI (LLaMA)")
                             display_summary(result_togetherai, identifier, use_typewriter=True)
                         
-                        # Save selected values for future sessions
+                        # Save selected input for future sessions.
                         if input_type == "Enter URL":
                             st.session_state.selected_url = input_data
                         elif input_type == "Upload PDF":
