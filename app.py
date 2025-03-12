@@ -4,7 +4,6 @@ import logging
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
-import json
 from io import BytesIO
 
 # Configure logging
@@ -39,7 +38,6 @@ if not firebase_admin._apps:
             # Hardcoded fallback for your project
             bucket_name = "project-astra-438804.appspot.com"
             cred = credentials.Certificate({
-                # Replace with your actual service account details if testing locally
                 "type": "service_account",
                 "project_id": "project-astra-438804",
                 "private_key_id": "your-private-key-id",
@@ -60,7 +58,7 @@ if not firebase_admin._apps:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
 
-# Firestore and Storage clients
+# Firestore (for saving summaries) and Storage clients
 db = firestore.client(database_id="statside-summary")
 bucket = storage.bucket(name="project-astra-438804.appspot.com")  # Your bucket name
 
@@ -73,7 +71,7 @@ def typewriter_effect(text, placeholder, delay=0.005):
         time.sleep(delay)
 
 def display_summary(summary, identifier, use_typewriter=False):
-    """Display the summary (download button and PDF preview removed)."""
+    """Display the generated summary (download and preview removed)."""
     with st.expander(f"Summary for {identifier}", expanded=True):
         st.subheader("Summary")
         if "Error" in summary["summary"]:
@@ -85,26 +83,23 @@ def display_summary(summary, identifier, use_typewriter=False):
             st.markdown(summary["summary"])
         st.write("---")
 
-def get_uploaded_files(user_id):
-    """Fetch previously uploaded files/URLs and their details from Firestore."""
-    try:
-        summaries_ref = db.collection("users").document(user_id).collection("summaries")
-        docs = summaries_ref.stream()
-        uploaded_files = {}
-        for doc in docs:
-            data = doc.to_dict()
-            if "base_name" in data:
-                uploaded_files[data["base_name"]] = {
-                    "input_data": data.get("input_data", ""),
-                    "summary": data.get("summary", ""),
-                    "custom_prompt": data.get("custom_prompt", ""),
-                    "model": data.get("model", ""),
-                    "file_url": data.get("file_url", "")
-                }
-        return uploaded_files
-    except Exception as e:
-        logging.error(f"Error fetching uploaded files: {str(e)}")
-        return {}
+def list_uploaded_files(user_id):
+    """
+    List the uploaded PDF files for a user from Firebase Storage.
+    Files are stored under the path "users/{user_id}/" in the bucket.
+    Returns a dictionary with file names as keys and file URLs as values.
+    """
+    prefix = f"users/{user_id}/"
+    blobs = bucket.list_blobs(prefix=prefix)
+    files = {}
+    for blob in blobs:
+        # Remove the user folder prefix to get the file name.
+        file_name = blob.name.replace(prefix, "", 1)
+        if file_name:
+            # Use the public URL (or generate a signed URL if needed).
+            file_url = blob.public_url
+            files[file_name] = file_url
+    return files
 
 def upload_to_storage(file, file_name, user_id):
     """Upload a file to Firebase Storage and return its download URL."""
@@ -112,8 +107,7 @@ def upload_to_storage(file, file_name, user_id):
         blob = bucket.blob(f"users/{user_id}/{file_name}")
         file.seek(0)
         blob.upload_from_file(file, content_type="application/pdf")
-        # Use public_url or a signed URL as per your needs
-        download_url = blob.public_url  
+        download_url = blob.public_url  # Use public_url or generate a signed URL if needed.
         logging.info(f"Uploaded {file_name} to Firebase Storage: {download_url}")
         return download_url
     except Exception as e:
@@ -127,103 +121,26 @@ def main():
     st.markdown(
         """
         <style>
-            .stFileUploader {
-                margin-top: 0 !important;
-                margin-bottom: 0 !important;
-            }
-            .stAlert {
-                margin-top: 0 !important;
-                margin-bottom: 0 !important;
-            }
-            .custom-prompt-box {
-                margin-top: 0 !important;
-                margin-bottom: 0 !important;
-                padding: 0 !important;
-            }
-            .title-container {
-                display: flex;
-                align-items: center;
-                gap: 20px;
-                margin-bottom: 10px;
-            }
-            .logo-img {
-                border-radius: 20px;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                max-width: 100%;
-            }
-            .stButton button {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-                padding: 12px 12px;
-            }
-            .stButton button:hover {
-                background-color: #45a049;
-            }
-            .stSelectbox, .stTextInput, .stFileUploader, .stTextArea {
-                border-radius: 8px;
-                padding: 10px;
-            }
-            .stFileUploader label {
-                color: #333;
-                font-weight: normal;
-            }
-            .stFileUploader .stButton>button {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 8px 16px;
-            }
-            .stFileUploader .stButton>button:hover {
-                background-color: #45a049;
-            }
-            .stSuccess {
-                background-color: #e6ffe6;
-                border-radius: 5px;
-                padding: 10px;
-                margin-bottom: 0;
-            }
-            .stTextArea {
-                border: 1px solid #e0e0e0;
-                background-color: #f9f9f9;
-                border-radius: 3px;
-                padding: 1px;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                white-space: pre-wrap;
-                margin-top: 0;
-                margin-bottom: 0;
-            }
-            .stTextArea::placeholder {
-                color: #666;
-                opacity: 0.8;
-            }
-            [data-testid="stMarkdownContainer"] {
-                margin: 0 !important;
-                padding: 0 !important;
-            }
-            .stMarkdown p {
-                font-size: 16px;
-                color: #666;
-                margin-top: 5px;
-                margin-bottom: 15px;
-                font-style: italic;
-            }
-            [data-testid="stWidgetLabel"] {
-                display: none !important;
-            }
-            .custom-prompt-box .stTextArea {
-                margin: 0 !important;
-                padding: 0 !important;
-            }
-            .custom-prompt-box .stColumns > div {
-                padding: 0 !important;
-                margin: 0 !important;
-            }
-            .custom-prompt-box .stMarkdown h4 {
-                margin: 0 !important;
-                padding: 0 !important;
-            }
+            .stFileUploader { margin-top: 0 !important; margin-bottom: 0 !important; }
+            .stAlert { margin-top: 0 !important; margin-bottom: 0 !important; }
+            .custom-prompt-box { margin-top: 0 !important; margin-bottom: 0 !important; padding: 0 !important; }
+            .title-container { display: flex; align-items: center; gap: 20px; margin-bottom: 10px; }
+            .logo-img { border-radius: 20px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); max-width: 100%; }
+            .stButton button { background-color: #4CAF50; color: white; border-radius: 5px; padding: 12px 12px; }
+            .stButton button:hover { background-color: #45a049; }
+            .stSelectbox, .stTextInput, .stFileUploader, .stTextArea { border-radius: 8px; padding: 10px; }
+            .stFileUploader label { color: #333; font-weight: normal; }
+            .stFileUploader .stButton>button { background-color: #4CAF50; color: white; border: none; border-radius: 5px; padding: 8px 16px; }
+            .stFileUploader .stButton>button:hover { background-color: #45a049; }
+            .stSuccess { background-color: #e6ffe6; border-radius: 5px; padding: 10px; margin-bottom: 0; }
+            .stTextArea { border: 1px solid #e0e0e0; background-color: #f9f9f9; border-radius: 3px; padding: 1px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); white-space: pre-wrap; margin-top: 0; margin-bottom: 0; }
+            .stTextArea::placeholder { color: #666; opacity: 0.8; }
+            [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
+            .stMarkdown p { font-size: 16px; color: #666; margin-top: 5px; margin-bottom: 15px; font-style: italic; }
+            [data-testid="stWidgetLabel"] { display: none !important; }
+            .custom-prompt-box .stTextArea { margin: 0 !important; padding: 0 !important; }
+            .custom-prompt-box .stColumns > div { padding: 0 !important; margin: 0 !important; }
+            .custom-prompt-box .stMarkdown h4 { margin: 0 !important; padding: 0 !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -234,7 +151,7 @@ def main():
     user_id = "guest_user"
     st.session_state.user_id = user_id
 
-    # UI Layout header
+    # Header UI layout
     col1, col2 = st.columns([1.5, 4.5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
@@ -245,8 +162,8 @@ def main():
         "Select a Stateside bill type, enter a URL, upload a PDF, or choose a previously uploaded file to generate a summary."
     )
 
-    # Get previously uploaded files (if any)
-    uploaded_files = get_uploaded_files(user_id)
+    # List previously uploaded PDFs from Firebase Storage
+    uploaded_files = list_uploaded_files(user_id)
 
     # Input type selection with three options
     input_type = st.selectbox("Select input type:", 
@@ -266,8 +183,7 @@ def main():
                 st.success("PDF uploaded successfully!")
             else:
                 st.info(f"File '{identifier}' already exists. It will be used from your previous uploads.")
-                record = uploaded_files.get(identifier, {})
-                file_url = record.get("file_url", "")
+                file_url = uploaded_files.get(identifier, "")
                 input_data = file_url  # Process as a URL
         elif "selected_pdf" in st.session_state:
             st.info(f"Selected PDF: {st.session_state.selected_pdf}")
@@ -285,10 +201,9 @@ def main():
         if uploaded_files:
             choice = st.selectbox("Select a previously uploaded file:", list(uploaded_files.keys()))
             if choice:
-                record = uploaded_files.get(choice, {})
                 identifier = choice
-                file_url = record.get("file_url", "")
-                input_data = file_url  # Use stored URL for processing
+                file_url = uploaded_files.get(choice, "")
+                input_data = file_url  # Use the stored file URL for processing
                 st.info(f"Selected file: {choice}")
         else:
             st.warning("No previously uploaded files available. Please upload a PDF first.")
