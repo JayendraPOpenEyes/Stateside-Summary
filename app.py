@@ -3,15 +3,16 @@ from summary import process_input
 import logging
 import time
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 import json
+from io import BytesIO
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Initialize Firebase using Streamlit Cloud secrets only
+# Initialize Firebase using Streamlit Cloud secrets
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
@@ -29,14 +30,19 @@ if not firebase_admin._apps:
                 "universe_domain": st.secrets["firebase"]["universe_domain"]
             }
             cred = credentials.Certificate(firebase_creds)
-            firebase_admin.initialize_app(cred)
+            firebase_admin.initialize_app(cred, {
+                'storageBucket': f"{st.secrets['firebase']['project_id']}.appspot.com"
+            })
             logging.info("Firebase initialized using Streamlit Cloud secrets")
         else:
             raise KeyError("Streamlit secrets missing 'firebase' section. Please configure [firebase] section in secrets.toml.")
     except Exception as e:
         logging.error(f"Failed to initialize Firebase: {str(e)}")
         raise
+
+# Firestore and Storage clients
 db = firestore.client(database_id="statside-summary")
+bucket = storage.bucket()
 
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""
@@ -46,8 +52,8 @@ def typewriter_effect(text, placeholder, delay=0.005):
         placeholder.markdown(display_text)
         time.sleep(delay)
 
-def display_summary(summary, identifier, use_typewriter=False):
-    """Display the summary in a structured format."""
+def display_summary(summary, identifier, use_typewriter=False, file_url=None):
+    """Display the summary in a structured format with an optional download link."""
     with st.expander(f"Summary for {identifier}", expanded=True):
         st.subheader("Summary")
         if "Error" in summary["summary"]:
@@ -57,6 +63,13 @@ def display_summary(summary, identifier, use_typewriter=False):
             typewriter_effect(summary["summary"], placeholder)
         else:
             st.markdown(summary["summary"])
+        if file_url and not identifier.startswith(("http://", "https://")):
+            st.download_button(
+                label="Download Original PDF",
+                data=file_url,
+                file_name=identifier,
+                mime="application/pdf"
+            )
         st.write("---")
 
 def get_uploaded_files(user_id):
@@ -72,12 +85,27 @@ def get_uploaded_files(user_id):
                     "input_data": data.get("input_data", ""),
                     "summary": data.get("summary", ""),
                     "custom_prompt": data.get("custom_prompt", ""),
-                    "model": data.get("model", "")
+                    "model": data.get("model", ""),
+                    "file_url": data.get("file_url", "")  # URL or file path in Storage
                 }
         return uploaded_files
     except Exception as e:
         logging.error(f"Error fetching uploaded files: {str(e)}")
         return {}
+
+def upload_to_storage(file, file_name, user_id):
+    """Upload a file to Firebase Storage and return its download URL."""
+    try:
+        blob = bucket.blob(f"users/{user_id}/{file_name}")
+        file.seek(0)  # Reset file pointer to start
+        blob.upload_from_file(file, content_type="application/pdf")
+        blob.make_public()  # Optional: make the file publicly accessible
+        download_url = blob.public_url  # Or use blob.generate_signed_url() for temporary access
+        logging.info(f"Uploaded {file_name} to Firebase Storage: {download_url}")
+        return download_url
+    except Exception as e:
+        logging.error(f"Failed to upload {file_name} to Firebase Storage: {str(e)}")
+        raise
 
 def main():
     st.set_page_config(layout="centered")
@@ -211,14 +239,15 @@ def main():
         if selected_file:
             selected_data = uploaded_files[selected_file]
             input_data = selected_data["input_data"]
+            file_url = selected_data["file_url"]
             if input_data.startswith(("http://", "https://")):
                 st.session_state.selected_url = input_data
                 input_type_default = "Enter URL"
             else:
                 st.session_state.selected_pdf = input_data
                 input_type_default = "Upload PDF"
-            # Instantly display the previous summary
-            display_summary({"summary": selected_data["summary"]}, selected_file, use_typewriter=False)
+            # Instantly display the previous summary with download link if available
+            display_summary({"summary": selected_data["summary"]}, selected_file, use_typewriter=False, file_url=file_url)
             st.session_state.custom_prompt = selected_data["custom_prompt"]
             st.session_state.selected_model = "OpenAI (GPT-4o-mini)" if selected_data["model"] == "gpt-4o-mini" else "TogetherAI (LLaMA)"
     else:
@@ -227,6 +256,7 @@ def main():
     input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"], index=0 if input_type_default == "Upload PDF" else 1)
     input_data = None
     identifier = ""
+    file_url = None
     if input_type == "Upload PDF":
         uploaded_pdf = st.file_uploader("Upload a PDF file", type=["pdf"])
         if uploaded_pdf:
@@ -287,6 +317,12 @@ def main():
                 st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
             else:
                 with st.spinner("Processing..."):
+                    # Handle PDF upload to Firebase Storage
+                    if input_type == "Upload PDF" and hasattr(input_data, "read"):
+                        file_url = upload_to_storage(input_data, identifier, user_id)
+                        # Reset file pointer for processing
+                        input_data.seek(0)
+                    
                     result = process_input(
                         input_data,
                         model=model_key,
@@ -299,7 +335,7 @@ def main():
                     else:
                         st.success("Summarization complete!")
                         st.session_state["last_processed"] = identifier
-                        display_summary(result, identifier, use_typewriter=True)
+                        display_summary(result, identifier, use_typewriter=True, file_url=file_url if input_type == "Upload PDF" else None)
                         # Update session state with new input
                         if input_type == "Enter URL":
                             st.session_state.selected_url = input_data
