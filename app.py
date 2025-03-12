@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from summary import process_input
 import logging
 import time
@@ -72,8 +73,8 @@ def typewriter_effect(text, placeholder, delay=0.005):
         placeholder.markdown(display_text)
         time.sleep(delay)
 
-def display_summary(summary, identifier, use_typewriter=False, file_url=None):
-    """Display the summary with an optional download link."""
+def display_summary(summary, identifier, use_typewriter=False):
+    """Display the summary (download button removed)."""
     with st.expander(f"Summary for {identifier}", expanded=True):
         st.subheader("Summary")
         if "Error" in summary["summary"]:
@@ -83,19 +84,12 @@ def display_summary(summary, identifier, use_typewriter=False, file_url=None):
             typewriter_effect(summary["summary"], placeholder)
         else:
             st.markdown(summary["summary"])
-        if file_url and not identifier.startswith(("http://", "https://")):
-            blob = bucket.blob(f"users/{st.session_state.get('user_id', 'guest_user')}/{identifier}")
-            try:
-                file_bytes = blob.download_as_bytes()
-                st.download_button(
-                    label="Download Original PDF",
-                    data=file_bytes,
-                    file_name=identifier,
-                    mime="application/pdf"
-                )
-            except Exception as e:
-                st.warning(f"Could not retrieve PDF: {str(e)}")
         st.write("---")
+
+def display_pdf_preview(file_url, identifier):
+    """Embed the PDF preview using an iframe."""
+    st.markdown(f"### PDF Preview: {identifier}")
+    components.iframe(file_url, height=600, scrolling=True)
 
 def get_uploaded_files(user_id):
     """Fetch previously uploaded files/URLs and their details from Firestore."""
@@ -245,7 +239,7 @@ def main():
     user_id = "guest_user"
     st.session_state.user_id = user_id
 
-    # UI Layout
+    # UI Layout header
     col1, col2 = st.columns([1.5, 4.5])
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
@@ -253,54 +247,58 @@ def main():
         st.title("Bill Summarization")
 
     st.markdown(
-        "Select a Stateside bill type, enter a URL, or upload a PDF file to generate a summary."
+        "Select a Stateside bill type, enter a URL, upload a PDF, or choose a previously uploaded file to generate a summary."
     )
 
-    # Fetch previously uploaded files/URLs with details
+    # Get previously uploaded files (if any)
     uploaded_files = get_uploaded_files(user_id)
-    if uploaded_files:
-        st.sidebar.markdown("### Choose a File")
-        selected_file = st.sidebar.selectbox("Select a previously uploaded file or URL:", list(uploaded_files.keys()))
-        if selected_file:
-            selected_data = uploaded_files[selected_file]
-            input_data = selected_data["input_data"]
-            file_url = selected_data["file_url"]
-            if input_data.startswith(("http://", "https://")):
-                st.session_state.selected_url = input_data
-                input_type_default = "Enter URL"
-            else:
-                st.session_state.selected_pdf = input_data
-                input_type_default = "Upload PDF"
-            display_summary({"summary": selected_data["summary"]}, selected_file, use_typewriter=False, file_url=file_url)
-            st.session_state.custom_prompt = selected_data["custom_prompt"]
-        else:
-            input_type_default = "Upload PDF"
-    else:
-        input_type_default = "Upload PDF"
 
-    input_type = st.selectbox("Select input type:", ["Upload PDF", "Enter URL"], index=0 if input_type_default == "Upload PDF" else 1)
+    # Input type selection with three options
+    input_type = st.selectbox("Select input type:", 
+                              options=["Upload PDF", "Enter URL", "Choose previously uploaded file"])
+
     input_data = None
     identifier = ""
     file_url = None
+
     if input_type == "Upload PDF":
         uploaded_pdf = st.file_uploader("Upload a PDF file", type=["pdf"])
         if uploaded_pdf:
-            # Check if file already exists to avoid re-upload
-            if uploaded_pdf.name not in uploaded_files:
+            identifier = uploaded_pdf.name
+            # If file not already uploaded, proceed with upload and summary generation
+            if identifier not in uploaded_files:
                 input_data = uploaded_pdf
-                identifier = uploaded_pdf.name
                 st.success("PDF uploaded successfully!")
             else:
-                st.info(f"File '{uploaded_pdf.name}' already exists. Select it from the sidebar.")
-                identifier = uploaded_pdf.name
+                st.info(f"File '{identifier}' already exists. It will be used from your previous uploads.")
+                # For existing files, use the stored file_url for processing
+                record = uploaded_files.get(identifier, {})
+                file_url = record.get("file_url", "")
+                input_data = file_url  # Process as a URL
         elif "selected_pdf" in st.session_state:
             st.info(f"Selected PDF: {st.session_state.selected_pdf}")
             identifier = st.session_state.selected_pdf
-    else:
-        url = st.text_input("Enter the URL of a PDF:", placeholder="Enter bill URL", value=st.session_state.get("selected_url", ""))
+
+    elif input_type == "Enter URL":
+        url = st.text_input("Enter the URL of a PDF:", 
+                            placeholder="Enter bill URL", 
+                            value=st.session_state.get("selected_url", ""))
         if url:
             input_data = url
             identifier = url
+
+    elif input_type == "Choose previously uploaded file":
+        if uploaded_files:
+            choice = st.selectbox("Select a previously uploaded file:", list(uploaded_files.keys()))
+            if choice:
+                record = uploaded_files.get(choice, {})
+                identifier = choice
+                file_url = record.get("file_url", "")
+                # Use file_url as input_data so that process_input treats it as a URL
+                input_data = file_url
+                st.info(f"Selected file: {choice}")
+        else:
+            st.warning("No previously uploaded files available. Please upload a PDF first.")
 
     if "custom_prompt" not in st.session_state:
         st.session_state.custom_prompt = ""
@@ -336,9 +334,6 @@ def main():
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # NOTE: The model selection dropdown is removed.
-    # Instead, both models will be used to generate summaries side by side.
-
     # Summarize Button Logic
     if st.button("Summarize"):
         if input_data:
@@ -346,6 +341,7 @@ def main():
                 st.error("Please enter a prompt or click 'Sample Prompt' to generate a summary.")
             else:
                 with st.spinner("Processing..."):
+                    # For uploads, ensure file is uploaded and pointer reset
                     if input_type == "Upload PDF" and hasattr(input_data, "read"):
                         file_url = upload_to_storage(input_data, identifier, user_id)
                         input_data.seek(0)
@@ -387,16 +383,22 @@ def main():
                         cols = st.columns(2)
                         with cols[0]:
                             st.header("OpenAI (GPT-4o-mini)")
-                            display_summary(result_openai, identifier, use_typewriter=True, file_url=file_url if input_type == "Upload PDF" else None)
+                            display_summary(result_openai, identifier, use_typewriter=True)
                         with cols[1]:
                             st.header("TogetherAI (LLaMA)")
-                            display_summary(result_togetherai, identifier, use_typewriter=True, file_url=file_url if input_type == "Upload PDF" else None)
+                            display_summary(result_togetherai, identifier, use_typewriter=True)
+                        
+                        # Save selected values for future sessions
                         if input_type == "Enter URL":
                             st.session_state.selected_url = input_data
-                        else:
+                        elif input_type == "Upload PDF":
                             st.session_state.selected_pdf = identifier
         else:
-            st.error("Please provide an input (PDF or URL) or select a file from the sidebar.")
+            st.error("Please provide an input (PDF, URL, or choose a previously uploaded file).")
+    
+    # Display PDF preview for uploads or chosen files (skip preview for Enter URL)
+    if input_type != "Enter URL" and file_url:
+        display_pdf_preview(file_url, identifier)
 
 if __name__ == "__main__":
     main()
