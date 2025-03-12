@@ -300,7 +300,7 @@ class TextProcessor:
             logging.error(f"Unexpected error with TogetherAI: {str(e)}")
             raise ValueError(f"Unexpected error generating summary with TogetherAI: {str(e)}")
 
-def generate_summary(self, text, base_name, custom_prompt, user_id, display_name):
+def generate_summary(self, text, base_name, custom_prompt, user_id, display_name, file_url=None):
     if not custom_prompt or custom_prompt.strip() == "":
         raise ValueError("Please enter a prompt or generate it through the sample prompt in the web app.")
     
@@ -313,7 +313,7 @@ def generate_summary(self, text, base_name, custom_prompt, user_id, display_name
             existing_data.get("model") == self.model):
             summary_id = doc.id
             logging.info(f"Fetching existing summary for {summary_id} with same file, prompt, and model")
-            return {"summary": existing_data["summary"], "input_data": existing_data.get("input_data", "")}
+            return {"summary": existing_data["summary"], "input_data": existing_data.get("input_data", ""), "file_url": existing_data.get("file_url", "")}
     
     summary_id = f"{base_name}_{int(time.time())}"
     
@@ -343,21 +343,25 @@ def generate_summary(self, text, base_name, custom_prompt, user_id, display_name
     input_data = base_name if base_name.startswith(("http://", "https://")) else base_name
 
     try:
-        summary_ref.document(summary_id).set({
+        summary_data = {
             "summary": summary["summary"],
             "custom_prompt": custom_prompt,
             "model": self.model,
             "timestamp": firestore.SERVER_TIMESTAMP,
             "base_name": base_name,
-            "input_data": input_data  # Store the URL or file name
-        })
+            "input_data": input_data
+        }
+        if file_url:  # Add file_url only for uploaded PDFs
+            summary_data["file_url"] = file_url
+
+        summary_ref.document(summary_id).set(summary_data)
         logging.info(f"Saved new summary to Firestore with summary_id: {summary_id}, base_name: {base_name}, model: {self.model}")
     except Exception as e:
         logging.error(f"Failed to save summary to Firestore: {str(e)}")
         raise
 
-    return {"summary": summary["summary"], "input_data": input_data}
-def process_input(input_data, model, custom_prompt, user_id, display_name):
+    return {"summary": summary["summary"], "input_data": input_data, "file_url": file_url}
+def process_input(input_data, model, custom_prompt, user_id, display_name, file_url=None):
     try:
         processor = TextProcessor(model=model)
         if hasattr(input_data, "read"):
@@ -374,20 +378,20 @@ def process_input(input_data, model, custom_prompt, user_id, display_name):
             if result["error"]:
                 return {"error": result["error"], "model": model}
             clean_text = processor.preprocess_text(result["text"])
-            input_data_str = base_name  # Store file name as input_data
+            input_data_str = base_name
         elif isinstance(input_data, str) and input_data.startswith(("http://", "https://")):
             result = asyncio.run(processor.async_extract_text_from_url(input_data))
             if result["error"]:
                 return {"error": result["error"], "model": model}
             clean_text = processor.preprocess_text(result["text"])
             base_name = processor.get_base_name_from_link(input_data)
-            input_data_str = input_data  # Store URL as input_data
+            input_data_str = input_data
         else:
             return {"error": "Invalid input type. Expected URL, PDF, or HTML file.", "model": model}
 
         logging.debug(f"Calling generate_summary with base_name={base_name}, custom_prompt={custom_prompt[:50]}...")
-        summary = processor.generate_summary(clean_text, base_name, custom_prompt, user_id, display_name)
-        return {"model": model, "summary": summary["summary"], "input_data": input_data_str}
+        summary = processor.generate_summary(clean_text, base_name, custom_prompt, user_id, display_name, file_url=file_url)
+        return {"model": model, "summary": summary["summary"], "input_data": input_data_str, "file_url": file_url}
     except ValueError as ve:
         logging.error(f"ValueError processing input: {str(ve)}")
         return {"error": f"ValueError: {str(ve)}", "model": model}
