@@ -196,7 +196,7 @@ def main():
         if url:
             input_data = url
             identifier = url
-    elif input_type == "Choose previously uploaded file":
+    elif input_type == "Choose file":
         if uploaded_files:
             choice = st.selectbox("Select a previously uploaded file:", list(uploaded_files.keys()))
             if choice:
