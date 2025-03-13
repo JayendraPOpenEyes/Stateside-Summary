@@ -162,14 +162,16 @@ def main():
     with col2:
         st.title("Bill Summarization")
 
-   
+    st.markdown(
+        "Select a Stateside bill type, enter a URL, upload a PDF, or choose a previously uploaded file to generate a summary."
+    )
 
     # List previously uploaded PDFs from Firebase Storage
     uploaded_files = list_uploaded_files(user_id)
 
     # Input type selection: Upload PDF, Enter URL, or Choose previously uploaded file.
     input_type = st.selectbox("Select input type:", 
-                              options=["Upload PDF", "Enter URL", "Choose file"])
+                              options=["Upload PDF", "Enter URL", "Choose previously uploaded file"])
 
     input_data = None
     identifier = ""
