@@ -171,7 +171,7 @@ def main():
 
     # Input type selection: Upload PDF, Enter URL, or Choose previously uploaded file.
     input_type = st.selectbox("Select input type:", 
-                              options=["Upload PDF", "Enter URL", "Choose previously uploaded file"])
+                              options=["Upload PDF", "Enter URL", "Choose file"])
 
     input_data = None
     identifier = ""
@@ -301,7 +301,7 @@ def main():
                         elif input_type == "Upload PDF":
                             st.session_state.selected_pdf = identifier
         else:
-            st.error("Please provide an input (PDF, URL, or choose a previously uploaded file).")
+            st.error("Please provide an input (PDF, URL, or choose file).")
 
 if __name__ == "__main__":
     main()
