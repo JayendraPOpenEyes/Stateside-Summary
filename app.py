@@ -62,7 +62,7 @@ if not firebase_admin._apps:
 # Firestore (for saving summaries) and Storage clients
 db = firestore.client(database_id="statside-summary")
 bucket = storage.bucket(name="project-astra-438804.appspot.com")  # Your bucket name
-
+    
 def typewriter_effect(text, placeholder, delay=0.005):
     """Simulate a typewriter effect by displaying text character by character."""
     display_text = ""
@@ -160,7 +160,7 @@ def main():
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
     with col2:
-        st.title("Bill Summarization")
+        st.title("Bill Summarization for stateside")
 
     st.markdown(
         "Select a Stateside bill type, enter a URL, upload a PDF, or choose a previously uploaded file to generate a summary."
@@ -214,7 +214,7 @@ def main():
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
     label_col, spacer_col, button_col = st.columns([6.5, 1, 2])
     with label_col:
-        st.markdown("#### Enter your custom prompt:")
+        st.markdown("#### Enter your custom prompt and what is your name :")
     with button_col:
         sample_prompt = """
             Summarize the provided legislative document, focusing only on new provisions introduced by this bill.
