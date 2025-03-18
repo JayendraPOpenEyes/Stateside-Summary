@@ -160,7 +160,7 @@ def main():
     with col1:
         st.image("logo.jpg", width=100, output_format="PNG", use_container_width=True)
     with col2:
-        st.title("Bill Summarization for stateside")
+        st.title("Bill Summarization")
 
     st.markdown(
         "Select a Stateside bill type, enter a URL, upload a PDF, or choose a previously uploaded file to generate a summary."
@@ -214,7 +214,7 @@ def main():
     st.markdown('<div class="custom-prompt-box">', unsafe_allow_html=True)
     label_col, spacer_col, button_col = st.columns([6.5, 1, 2])
     with label_col:
-        st.markdown("#### Enter your custom prompt and what is your name :")
+        st.markdown("#### Enter your custom prompt:")
     with button_col:
         sample_prompt = """
             Summarize the provided legislative document, focusing only on new provisions introduced by this bill.
