@@ -61,7 +61,7 @@ class TextProcessor:
                     raise KeyError
             except KeyError:
                 raise ValueError("OPENAI_API_KEY is missing or empty in Streamlit secrets.")
-            self.model = "gpt-4o-mini"
+            self.model = "gpt-4o"
             self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
         elif model.lower() == "togetherai":
             try:
