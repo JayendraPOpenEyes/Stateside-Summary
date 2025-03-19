@@ -289,10 +289,10 @@ def main():
                         st.session_state["last_processed"] = identifier
                         cols = st.columns(2)
                         with cols[0]:
-                            st.header("OpenAI (GPT-4o-mini)")
+                            st.header("Model 1")
                             display_summary(result_openai, identifier, use_typewriter=True)
                         with cols[1]:
-                            st.header("TogetherAI (LLaMA)")
+                            st.header("Model 2")
                             display_summary(result_togetherai, identifier, use_typewriter=True)
                         
                         # Save selected input for future sessions.
